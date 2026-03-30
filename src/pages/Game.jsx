@@ -247,8 +247,9 @@ export default function Game() {
   const [comment, setComment]           = useState('')
   const [breakdown, setBreakdown]       = useState(null)
   const [copied, setCopied]             = useState(false)
-  const [hasListened, setHasListened]   = useState(false)
-  const [countdown, setCountdown]       = useState(null)
+  const [hasListened, setHasListened]         = useState(false)
+  const [reversedAudioReady, setReversedAudioReady] = useState(false)
+  const [countdown, setCountdown]             = useState(null)
   const [guestGuessText, setGuestGuessText] = useState('')
   const [actualTranscription, setActualTranscription] = useState(null)
   const [attemptTranscription, setAttemptTranscription] = useState(null)
@@ -505,7 +506,7 @@ export default function Game() {
         setScore(null); setComment(''); setBreakdown(null)
         setActualTranscription(null); setAttemptTranscription(null)
         setGuestGuessText(''); setManualScore(null)
-        setHasListened(false); setUploadTimedOut(false)
+        setHasListened(false); setReversedAudioReady(false); setUploadTimedOut(false)
         audio.setAudioBlob?.(null); audio.setReversedBlob?.(null)
         // Reset per-round superpower UI
         setSlowMoActive(false)
@@ -600,7 +601,7 @@ export default function Game() {
       setSlowMoActive(false)
       setChoicesOptions(null)
       setVisionImage(null)
-      setHasListened(false); setUploadTimedOut(false)
+      setHasListened(false); setReversedAudioReady(false); setUploadTimedOut(false)
       audio.setAudioBlob?.(null); audio.setReversedBlob?.(null)
       broadcastState(GAME_EVENTS.NEXT_ROUND, { nextRound })
       hapticHeavy()
@@ -642,24 +643,20 @@ export default function Game() {
   // ─── Superpower handlers ──────────────────────────────────────────────────
   const { VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY } = import.meta.env
 
-  const activateSlowMo = useCallback(() => {
+  const activateSlowMo = useCallback(async () => {
     if (!slowMoSupported) {
       toast.error('⚠️ Ваше устройство не поддерживает Slow Mo. Обновите браузер или устройство.')
       return
     }
-    if (slowMoActive) {
-      // toggle off — restore normal speed
-      setSlowMoActive(false)
-      audio.setPlaybackRate(1.0)
-    } else {
-      if (usedPowers.slow >= maxPowers.slow) { toast.error('Зарядов Slow Mo не осталось'); return }
-      setSlowMoActive(true)
-      setUsedPowers(p => ({ ...p, slow: p.slow + 1 }))
-      audio.setPlaybackRate(0.5)
-      hapticLight()
-      toast.success('🐢 Slow Mo включён!')
-    }
-  }, [slowMoSupported, slowMoActive, usedPowers.slow, maxPowers.slow, audio, toast])
+    if (usedPowers.slow >= maxPowers.slow) { toast.error('Зарядов Slow Mo не осталось'); return }
+    setSlowMoActive(true)
+    setUsedPowers(p => ({ ...p, slow: p.slow + 1 }))
+    hapticLight()
+    toast.success('🐢 Slow Mo — прослушивание замедлено!')
+    // Immediately play the reversed audio at half speed
+    await handlePlayReversed(0.5)
+    setSlowMoActive(false)
+  }, [slowMoSupported, usedPowers.slow, maxPowers.slow, handlePlayReversed, toast])
 
   const activateChoices = useCallback(async () => {
     if (usedPowers.choices >= maxPowers.choices) { toast.error('Зарядов AI Choices не осталось'); return }
@@ -834,15 +831,39 @@ export default function Game() {
     navigate('/lobby')
   }
 
-  const handlePlayReversed = async () => {
+  // Poll until reversed_audio_url is available in DB, then mark ready
+  useEffect(() => {
+    if (!isGuesser || phase !== PHASES.GUEST_LISTEN) return
+    setReversedAudioReady(false)
+    let cancelled = false
+    const poll = async () => {
+      for (let i = 0; i < 30; i++) {
+        if (cancelled) return
+        try {
+          const { data: session } = await supabase
+            .from('game_sessions').select('reversed_audio_url').eq('room_id', roomId)
+            .order('created_at', { ascending: false }).limit(1).maybeSingle()
+          if (session?.reversed_audio_url) {
+            if (!cancelled) setReversedAudioReady(true)
+            return
+          }
+        } catch { /* ignore */ }
+        await new Promise(r => setTimeout(r, 1500))
+      }
+    }
+    poll()
+    return () => { cancelled = true }
+  }, [phase, isGuesser, roomId])
+
+  const handlePlayReversed = async (playbackRate = 1.0) => {
     const { data: session } = await supabase
-      .from('game_sessions').select('*').eq('room_id', roomId)
+      .from('game_sessions').select('reversed_audio_url').eq('room_id', roomId)
       .order('created_at', { ascending: false }).limit(1).maybeSingle()
     const url = session?.reversed_audio_url || gameSession?.reversed_audio_url
     if (url) {
       const { data: fileData } = await supabase.storage.from('audio').download(url)
       if (fileData) {
-        audio.playAudio(fileData)
+        audio.playAudio(fileData, playbackRate)
         setHasListened(true)
       }
     }
@@ -1537,44 +1558,62 @@ export default function Game() {
           {/* GUEST — listen + mimic controls */}
           {isGuesser && phase === PHASES.GUEST_LISTEN && (
             <div style={{ textAlign: 'center' }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'center', marginBottom: '8px' }}>
-                <ActionButton onClick={handlePlayReversed} disabled={audio.isPlaying} variant="cyan">
-                  🎧 Послушать реверс
-                </ActionButton>
-                <ActionButton onClick={handleMimicStart} disabled={!hasListened} variant="primary">
-                  🗣️ Начать повтор
-                </ActionButton>
-              </div>
-              {/* Slow Mo in GUEST_LISTEN */}
-              {maxPowers.slow > 0 && (
-                <div style={{ marginTop: '12px' }}>
-                  <button
-                    onClick={activateSlowMo}
-                    disabled={!audio.isPlaying && !slowMoActive}
-                    style={{
-                      padding: '10px 20px', borderRadius: '14px', border: 'none', cursor: 'pointer',
-                      background: slowMoActive
-                        ? 'linear-gradient(135deg, #059669, #10B981)'
-                        : usedPowers.slow >= maxPowers.slow
-                          ? 'rgba(255,255,255,0.04)'
-                          : 'rgba(16,185,129,0.15)',
-                      color: usedPowers.slow >= maxPowers.slow ? 'rgba(255,255,255,0.2)' : '#10B981',
-                      fontWeight: 700, fontSize: '13px',
-                      boxShadow: slowMoActive ? '0 0 20px rgba(16,185,129,0.4)' : 'none',
-                      transition: 'all 0.2s', display: 'inline-flex', alignItems: 'center', gap: '8px',
-                      border: `1px solid ${usedPowers.slow >= maxPowers.slow ? 'rgba(255,255,255,0.06)' : 'rgba(16,185,129,0.3)'}`,
-                    }}
-                  >
-                    🐢 {slowMoActive ? 'Slow Mo ВКЛ — выключить' : 'Slow Mo'}
-                    <span style={{ fontSize: '11px', opacity: 0.7 }}>{maxPowers.slow - usedPowers.slow}/{maxPowers.slow}</span>
-                  </button>
-                  {!slowMoSupported && <p style={{ fontSize: '11px', color: '#EF4444', marginTop: '6px' }}>⚠️ Недоступно на вашем устройстве</p>}
+              {!reversedAudioReady ? (
+                /* ─── Waiting for other player's audio to upload ─── */
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
+                  <div style={{
+                    width: '48px', height: '48px', borderRadius: '50%',
+                    border: '3px solid rgba(124,58,237,0.2)',
+                    borderTop: '3px solid #A78BFA',
+                    animation: 'spin 1s linear infinite',
+                  }} />
+                  <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)', margin: 0 }}>
+                    Получаем аудио от другого игрока...
+                  </p>
                 </div>
-              )}
-              {!hasListened && (
-                <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', margin: '4px 0 0' }}>
-                  ⚠️ Сначала послушайте реверс
-                </p>
+              ) : (
+                /* ─── Audio ready — show controls ─── */
+                <>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'center', marginBottom: '8px' }}>
+                    <ActionButton onClick={() => handlePlayReversed(1.0)} disabled={audio.isPlaying} variant="cyan">
+                      🎧 Послушать реверс
+                    </ActionButton>
+                    <ActionButton onClick={handleMimicStart} disabled={!hasListened} variant="primary">
+                      🗣️ Начать повтор
+                    </ActionButton>
+                  </div>
+                  {/* Slow Mo */}
+                  {maxPowers.slow > 0 && (
+                    <div style={{ marginTop: '12px' }}>
+                      <button
+                        onClick={activateSlowMo}
+                        disabled={audio.isPlaying || slowMoActive || usedPowers.slow >= maxPowers.slow || !slowMoSupported}
+                        style={{
+                          padding: '10px 20px', borderRadius: '14px', cursor: 'pointer',
+                          background: slowMoActive
+                            ? 'linear-gradient(135deg, #059669, #10B981)'
+                            : usedPowers.slow >= maxPowers.slow
+                              ? 'rgba(255,255,255,0.04)'
+                              : 'rgba(16,185,129,0.15)',
+                          color: usedPowers.slow >= maxPowers.slow ? 'rgba(255,255,255,0.2)' : '#10B981',
+                          fontWeight: 700, fontSize: '13px',
+                          boxShadow: slowMoActive ? '0 0 20px rgba(16,185,129,0.4)' : 'none',
+                          transition: 'all 0.2s', display: 'inline-flex', alignItems: 'center', gap: '8px',
+                          border: `1px solid ${usedPowers.slow >= maxPowers.slow ? 'rgba(255,255,255,0.06)' : 'rgba(16,185,129,0.3)'}`,
+                        }}
+                      >
+                        {slowMoActive ? <BtnSpinner size={13} /> : '🐢'} {slowMoActive ? 'Загружаем...' : 'Slow Mo'}
+                        <span style={{ fontSize: '11px', opacity: 0.7 }}>{maxPowers.slow - usedPowers.slow}/{maxPowers.slow}</span>
+                      </button>
+                      {!slowMoSupported && <p style={{ fontSize: '11px', color: '#EF4444', marginTop: '6px' }}>⚠️ Недоступно на вашем устройстве</p>}
+                    </div>
+                  )}
+                  {!hasListened && (
+                    <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', margin: '8px 0 0' }}>
+                      ⚠️ Сначала послушайте реверс
+                    </p>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -1954,6 +1993,9 @@ export default function Game() {
             0% { transform: scale(0.3); opacity: 0; }
             50% { transform: scale(1.15); opacity: 1; }
             100% { transform: scale(1); opacity: 1; }
+          }
+          @keyframes spin {
+            to { transform: rotate(360deg); }
           }
         `}</style>
       </div>
