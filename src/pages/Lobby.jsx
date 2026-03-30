@@ -16,8 +16,10 @@ export default function Lobby() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [copied, setCopied] = useState(null)
-  // Set of room IDs where it's the current user's turn to act
+  // Set of room IDs where it's the current user's turn to act (round in progress, no score yet)
   const [myTurnRooms, setMyTurnRooms] = useState(new Set())
+  // Map of roomId → latest session data (for status labels)
+  const [sessionMap, setSessionMap] = useState({})
   const [showRoundPicker, setShowRoundPicker] = useState(false)
   const [pendingRounds, setPendingRounds] = useState(null)
   const [selectedLang, setSelectedLang] = useState(DEFAULT_LANGUAGE_ID)
@@ -57,7 +59,7 @@ export default function Lobby() {
     setLoading(false)
     if (manual) setTimeout(() => setRefreshing(false), 400)
 
-    // Determine whose turn it is for playing rooms I'm in
+    // Determine turn state for playing rooms I'm in
     if (user?.id && data?.length) {
       const myPlayingRooms = data.filter(
         r => r.status === 'playing' && (r.host_id === user.id || r.guest_id === user.id)
@@ -65,23 +67,26 @@ export default function Lobby() {
       if (myPlayingRooms.length) {
         const { data: sessions } = await supabase
           .from('game_sessions')
-          .select('room_id, recorder_id')
+          .select('room_id, recorder_id, ai_score, round_number')
           .in('room_id', myPlayingRooms.map(r => r.id))
-        const turnSet = new Set()
+          .order('created_at', { ascending: false })
+        // Build map: latest session per room
+        const map = {}
         ;(sessions || []).forEach(s => {
-          // If I'm NOT the recorder → it's my turn to guess
-          // If I AM the recorder and mimic not yet done → my turn to record
-          // Simple heuristic: session exists and I'm the recorder → my turn to record
-          // session exists and I'm NOT the recorder → my turn to guess
-          if (s.recorder_id) {
-            // If recorder hasn't uploaded the audio yet or guesser hasn't guessed yet
-            // Either way, one of us needs to act — flag both cases as "your turn"
+          if (!map[s.room_id]) map[s.room_id] = s // first = latest (desc order)
+        })
+        setSessionMap(map)
+        const turnSet = new Set()
+        Object.values(map).forEach(s => {
+          // Only flag as "my turn" if round is actively in progress (no score yet)
+          if (s.recorder_id && s.ai_score == null) {
             turnSet.add(s.room_id)
           }
         })
         setMyTurnRooms(turnSet)
       } else {
         setMyTurnRooms(new Set())
+        setSessionMap({})
       }
     }
   }
@@ -320,13 +325,39 @@ export default function Lobby() {
                           )}
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
-                          <span style={{
-                            fontSize: '12px', padding: '2px 10px', borderRadius: '100px', fontWeight: 600,
-                            background: room.status === 'waiting' ? 'rgba(245,158,11,0.15)' : 'rgba(16,185,129,0.15)',
-                            color: room.status === 'waiting' ? '#F59E0B' : '#10B981',
-                          }}>
-                            {room.status === 'waiting' ? '⏳ Ожидание' : '🎮 В игре'}
-                          </span>
+                          {(() => {
+                            const sess = sessionMap[room.id]
+                            if (room.status === 'waiting') {
+                              return (
+                                <span style={{ fontSize: '12px', padding: '2px 10px', borderRadius: '100px', fontWeight: 600, background: 'rgba(245,158,11,0.15)', color: '#F59E0B' }}>
+                                  ⏳ Ожидание игрока
+                                </span>
+                              )
+                            }
+                            if (isMyRoom && sess) {
+                              const roundNum = sess.round_number ?? room.current_round ?? 1
+                              const totalRounds = room.total_rounds ?? 3
+                              if (sess.ai_score != null) {
+                                // Round complete — host needs to start next
+                                const nextRound = roundNum < totalRounds ? roundNum + 1 : null
+                                return (
+                                  <span style={{ fontSize: '12px', padding: '2px 10px', borderRadius: '100px', fontWeight: 600, background: 'rgba(245,158,11,0.12)', color: '#F59E0B' }}>
+                                    {nextRound ? `⏸ Ожидание раунда ${nextRound}` : '🏆 Финальный результат'}
+                                  </span>
+                                )
+                              }
+                              return (
+                                <span style={{ fontSize: '12px', padding: '2px 10px', borderRadius: '100px', fontWeight: 600, background: 'rgba(16,185,129,0.15)', color: '#10B981' }}>
+                                  🎮 Раунд {roundNum} / {totalRounds}
+                                </span>
+                              )
+                            }
+                            return (
+                              <span style={{ fontSize: '12px', padding: '2px 10px', borderRadius: '100px', fontWeight: 600, background: 'rgba(16,185,129,0.15)', color: '#10B981' }}>
+                                🎮 В игре
+                              </span>
+                            )
+                          })()}
                           {room.guest && (
                             <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)' }}>
                               vs {room.guest.username}
