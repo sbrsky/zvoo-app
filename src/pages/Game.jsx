@@ -356,6 +356,16 @@ export default function Game() {
     }
   }, [room?.total_rounds, room?.current_round, room?.sp_slow_max, room?.sp_choices_max, room?.sp_vision_max])
 
+  // Restore SP usage from DB (survives page refresh)
+  useEffect(() => {
+    if (!gameSession || !isGuesser) return
+    setUsedPowers({
+      slow:    gameSession.sp_slow_used    ?? 0,
+      choices: gameSession.sp_choices_used ?? 0,
+      vision:  gameSession.sp_vision_used  ?? 0,
+    })
+  }, [gameSession?.id, isGuesser])
+
   // Detect guest joined → move host to READY phase
   useEffect(() => {
     if (!room || !isHost) return
@@ -664,21 +674,24 @@ export default function Game() {
       return
     }
     if (usedPowers.slow >= maxPowers.slow) { toast.error('Зарядов Slow Mo не осталось'); return }
+    const newCount = usedPowers.slow + 1
     setSlowMoActive(true)
-    setUsedPowers(p => ({ ...p, slow: p.slow + 1 }))
+    setUsedPowers(p => ({ ...p, slow: newCount }))
+    updateSession({ sp_slow_used: newCount }).catch(() => {})
     hapticLight()
     toast.success('🐢 Slow Mo — прослушивание замедлено!')
-    // Immediately play the reversed audio at half speed
     await handlePlayReversed(0.5)
     setSlowMoActive(false)
-  }, [slowMoSupported, usedPowers.slow, maxPowers.slow, handlePlayReversed, toast])
+  }, [slowMoSupported, usedPowers.slow, maxPowers.slow, handlePlayReversed, updateSession, toast])
 
   const activateChoices = useCallback(async () => {
     if (usedPowers.choices >= maxPowers.choices) { toast.error('Зарядов AI Choices не осталось'); return }
     if (choicesLoading || choicesOptions) return
     if (!actualTranscription) { toast.error('Транскрипция ещё не готова, подожди...'); return }
+    const newCount = usedPowers.choices + 1
     setChoicesLoading(true)
-    setUsedPowers(p => ({ ...p, choices: p.choices + 1 }))
+    setUsedPowers(p => ({ ...p, choices: newCount }))
+    updateSession({ sp_choices_used: newCount }).catch(() => {})
     try {
       const fnUrl = `${VITE_SUPABASE_URL}/functions/v1/gemini-scoring`
       const res = await fetch(fnUrl, {
@@ -693,18 +706,21 @@ export default function Game() {
       toast.success('🎯 AI предложил варианты!')
     } catch (e) {
       toast.error(`AI Choices: ${e.message}`)
-      setUsedPowers(p => ({ ...p, choices: Math.max(0, p.choices - 1) })) // refund on error
+      setUsedPowers(p => ({ ...p, choices: Math.max(0, p.choices - 1) }))
+      updateSession({ sp_choices_used: Math.max(0, newCount - 1) }).catch(() => {})
     } finally {
       setChoicesLoading(false)
     }
-  }, [usedPowers.choices, maxPowers.choices, choicesLoading, choicesOptions, actualTranscription, room?.game_language, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, toast])
+  }, [usedPowers.choices, maxPowers.choices, choicesLoading, choicesOptions, actualTranscription, room?.game_language, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, updateSession, toast])
 
   const activateVision = useCallback(async () => {
     if (usedPowers.vision >= maxPowers.vision) { toast.error('Зарядов AI Vision не осталось'); return }
     if (visionLoading || visionImage) return
     if (!actualTranscription) { toast.error('Транскрипция ещё не готова, подожди...'); return }
+    const newCount = usedPowers.vision + 1
     setVisionLoading(true)
-    setUsedPowers(p => ({ ...p, vision: p.vision + 1 }))
+    setUsedPowers(p => ({ ...p, vision: newCount }))
+    updateSession({ sp_vision_used: newCount }).catch(() => {})
     try {
       const fnUrl = `${VITE_SUPABASE_URL}/functions/v1/gemini-scoring`
       const res = await fetch(fnUrl, {
@@ -719,11 +735,12 @@ export default function Game() {
       toast.success('🎨 AI Vision готов!')
     } catch (e) {
       toast.error(`AI Vision: ${e.message}`)
-      setUsedPowers(p => ({ ...p, vision: Math.max(0, p.vision - 1) })) // refund on error
+      setUsedPowers(p => ({ ...p, vision: Math.max(0, p.vision - 1) }))
+      updateSession({ sp_vision_used: Math.max(0, newCount - 1) }).catch(() => {})
     } finally {
       setVisionLoading(false)
     }
-  }, [usedPowers.vision, maxPowers.vision, visionLoading, visionImage, actualTranscription, room?.game_language, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, toast])
+  }, [usedPowers.vision, maxPowers.vision, visionLoading, visionImage, actualTranscription, room?.game_language, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, updateSession, toast])
   // ─────────────────────────────────────────────────────────────────────────
 
   const activeHandlerRef = useRef(null)
@@ -1824,6 +1841,27 @@ export default function Game() {
                 </div>
                 <div style={{ fontSize: '14px', color: 'rgba(255,255,255,0.3)', marginBottom: '12px' }}>/ 100</div>
                 {comment && <p style={{ fontSize: '14px', color: 'rgba(255,255,255,0.6)', margin: '0 0 16px' }}>{comment}</p>}
+                {/* Recorder can listen to the mimic reversed audio for fun */}
+                {isRecorder && gameSession?.mimic_reversed_url && (
+                  <button
+                    onClick={async () => {
+                      const { data } = await supabase.storage.from('audio').download(gameSession.mimic_reversed_url)
+                      if (data) audio.playAudio(data, 1.0)
+                    }}
+                    disabled={audio.isPlaying}
+                    style={{
+                      marginTop: '12px', padding: '10px 20px', borderRadius: '12px',
+                      border: '1px solid rgba(6,182,212,0.3)',
+                      background: 'rgba(6,182,212,0.08)',
+                      color: '#06B6D4', fontSize: '13px', fontWeight: 600,
+                      cursor: 'pointer', transition: 'all 0.2s', width: '100%',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(6,182,212,0.18)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(6,182,212,0.08)'}
+                  >
+                    🎧 Послушать реверс соперника
+                  </button>
+                )}
                 {isHost ? (
                   <ActionButton
                     onClick={handleNextRound}
@@ -1907,6 +1945,27 @@ export default function Game() {
                   </div>
                 )}
 
+                {/* Recorder: listen to mimic reversed for fun */}
+                {isRecorder && gameSession?.mimic_reversed_url && (
+                  <button
+                    onClick={async () => {
+                      const { data } = await supabase.storage.from('audio').download(gameSession.mimic_reversed_url)
+                      if (data) audio.playAudio(data, 1.0)
+                    }}
+                    disabled={audio.isPlaying}
+                    style={{
+                      padding: '12px 24px', borderRadius: '14px',
+                      border: '1px solid rgba(6,182,212,0.3)',
+                      background: 'rgba(6,182,212,0.08)',
+                      color: '#06B6D4', fontSize: '14px', fontWeight: 600,
+                      cursor: 'pointer', transition: 'all 0.2s', width: '100%',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(6,182,212,0.18)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(6,182,212,0.08)'}
+                  >
+                    🎧 Послушать реверс соперника
+                  </button>
+                )}
                 {/* Rematch buttons */}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'center' }}>
                   {!rematchRequested ? (
