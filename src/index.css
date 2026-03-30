@@ -501,3 +501,16 @@ body {
   100% { opacity: 1; transform: scale(1); }
 }
 
+/* ─── Lobby "your turn" pulsing border ─── */
+@keyframes pulse-border {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(167,139,250,0.5),
+                0 0 16px rgba(124,58,237,0.2);
+    border-color: rgba(167,139,250,0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(167,139,250,0),
+                0 0 32px rgba(124,58,237,0.5);
+    border-color: #A78BFA;
+  }
+}

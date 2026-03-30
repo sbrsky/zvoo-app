@@ -16,6 +16,8 @@ export default function Lobby() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [copied, setCopied] = useState(null)
+  // Set of room IDs where it's the current user's turn to act
+  const [myTurnRooms, setMyTurnRooms] = useState(new Set())
   const [showRoundPicker, setShowRoundPicker] = useState(false)
   const [pendingRounds, setPendingRounds] = useState(null)
   const [selectedLang, setSelectedLang] = useState(DEFAULT_LANGUAGE_ID)
@@ -54,6 +56,34 @@ export default function Lobby() {
     setRooms(data || [])
     setLoading(false)
     if (manual) setTimeout(() => setRefreshing(false), 400)
+
+    // Determine whose turn it is for playing rooms I'm in
+    if (user?.id && data?.length) {
+      const myPlayingRooms = data.filter(
+        r => r.status === 'playing' && (r.host_id === user.id || r.guest_id === user.id)
+      )
+      if (myPlayingRooms.length) {
+        const { data: sessions } = await supabase
+          .from('game_sessions')
+          .select('room_id, recorder_id')
+          .in('room_id', myPlayingRooms.map(r => r.id))
+        const turnSet = new Set()
+        ;(sessions || []).forEach(s => {
+          // If I'm NOT the recorder → it's my turn to guess
+          // If I AM the recorder and mimic not yet done → my turn to record
+          // Simple heuristic: session exists and I'm the recorder → my turn to record
+          // session exists and I'm NOT the recorder → my turn to guess
+          if (s.recorder_id) {
+            // If recorder hasn't uploaded the audio yet or guesser hasn't guessed yet
+            // Either way, one of us needs to act — flag both cases as "your turn"
+            turnSet.add(s.room_id)
+          }
+        })
+        setMyTurnRooms(turnSet)
+      } else {
+        setMyTurnRooms(new Set())
+      }
+    }
   }
 
   const createRoom = useCallback(async (totalRounds = 3) => {
@@ -226,26 +256,36 @@ export default function Lobby() {
               {rooms.map(room => {
                 const isMyRoom = room.host_id === user.id || room.guest_id === user.id
                 const canJoin = room.status === 'waiting' && room.host_id !== user.id && !room.guest_id
+                const isMyTurn = isMyRoom && myTurnRooms.has(room.id)
                 return (
                   <div
                     key={room.id}
                     style={{
                       padding: '20px 24px',
                       borderRadius: '20px',
-                      background: isMyRoom ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.04)',
-                      border: `1px solid ${isMyRoom ? 'rgba(124,58,237,0.25)' : 'rgba(255,255,255,0.08)'}`,
+                      background: isMyTurn
+                        ? 'rgba(124,58,237,0.13)'
+                        : isMyRoom
+                          ? 'rgba(124,58,237,0.08)'
+                          : 'rgba(255,255,255,0.04)',
+                      border: isMyTurn
+                        ? '2px solid #A78BFA'
+                        : `1px solid ${isMyRoom ? 'rgba(124,58,237,0.25)' : 'rgba(255,255,255,0.08)'}`,
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px',
                       cursor: isMyRoom || canJoin ? 'pointer' : 'default',
-                      transition: 'all 0.2s',
+                      transition: 'background 0.2s',
+                      animation: isMyTurn ? 'pulse-border 1.8s ease-in-out infinite' : 'none',
+                      boxShadow: isMyTurn ? '0 0 0 0 rgba(167,139,250,0.5)' : 'none',
+                      position: 'relative',
                     }}
                     onClick={() => {
                       if (canJoin || isMyRoom) navigate(`/game/${room.id}`)
                     }}
                     onMouseEnter={e => {
-                      if (canJoin || isMyRoom) e.currentTarget.style.background = isMyRoom ? 'rgba(124,58,237,0.13)' : 'rgba(255,255,255,0.07)'
+                      if (canJoin || isMyRoom) e.currentTarget.style.background = isMyTurn ? 'rgba(124,58,237,0.18)' : isMyRoom ? 'rgba(124,58,237,0.13)' : 'rgba(255,255,255,0.07)'
                     }}
                     onMouseLeave={e => {
-                      e.currentTarget.style.background = isMyRoom ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.04)'
+                      e.currentTarget.style.background = isMyTurn ? 'rgba(124,58,237,0.13)' : isMyRoom ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.04)'
                     }}
                   >
                     {/* Host avatar + info */}
@@ -263,7 +303,17 @@ export default function Lobby() {
                           <span style={{ fontWeight: 700, color: 'white', fontSize: '15px' }}>
                             {room.host?.username || 'Unknown'}
                           </span>
-                          {isMyRoom && (
+                          {isMyTurn && (
+                            <span style={{
+                              fontSize: '11px', padding: '2px 10px', borderRadius: '100px',
+                              background: 'rgba(167,139,250,0.25)', color: '#C4B5FD', fontWeight: 700,
+                              animation: 'pulse-glow 1s ease-in-out infinite',
+                              border: '1px solid rgba(167,139,250,0.4)',
+                            }}>
+                              ⚡ ВАШ ХОД!
+                            </span>
+                          )}
+                          {!isMyTurn && isMyRoom && (
                             <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '100px', background: 'rgba(124,58,237,0.2)', color: '#A78BFA', fontWeight: 600 }}>
                               Моя
                             </span>
