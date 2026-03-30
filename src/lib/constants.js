@@ -20,7 +20,43 @@ export const GAME_EVENTS = {
   REMATCH_REQUESTED:  'REMATCH_REQUESTED',
   REMATCH_ACCEPTED:   'REMATCH_ACCEPTED',
   HOST_START:         'HOST_START',
+  IMAG_GENERATE:      'IMAG_GENERATE', // Imaginarium: host started generating image (guest now waiting)
+  IMAG_READY:         'IMAG_READY',  // Imaginarium: host sends image+choices to guest
+  FINAL_STATS:        'FINAL_STATS',
+  GUEST_PROFILE_UPDATE: 'GUEST_PROFILE_UPDATE',
 }
+
+export const GAME_TYPES = {
+  CLASSIC:      'classic',
+  IMAGINARIUM:  'imaginarium',
+}
+
+export const IMAGINARIUM_STYLES = [
+  {
+    id: 'crazy_dreams',
+    name: 'Сумасшедшие сны',
+    icon: '😴',
+    description: 'Сюрреалистичный сон, в котором угадывается слово',
+    color: '#8B5CF6',
+    promptHint: 'surreal dream',
+  },
+  {
+    id: 'abstractionism',
+    name: 'Абстракционизм',
+    icon: '🎨',
+    description: 'Как нарисовал бы художник-абстракционист',
+    color: '#F59E0B',
+    promptHint: 'abstract art',
+  },
+  {
+    id: 'kids_doodles',
+    name: 'Детские каляки-маляки',
+    icon: '✏️',
+    description: 'Рисунок ребёнка, описывающего фразу',
+    color: '#10B981',
+    promptHint: 'child drawing',
+  },
+]
 
 export const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || ''
 

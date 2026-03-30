@@ -199,9 +199,17 @@ serve(async (req) => {
       only_transcribe = false,
       actualTranscriptionText = '',
       language = 'ru',
-      action = '',           // 'generate_choices' | 'generate_vision' | ''
-      transcription = '',   // for superpower actions
+      action = '',           // 'generate_choices' | 'generate_vision' | 'generate_imaginarium' | ''
+      transcription = '',   // for superpower/imaginarium actions (legacy)
+      phrase = '',          // alias for transcription in generate_imaginarium
+      imagStyle = '',       // for generate_imaginarium: crazy_dreams | abstractionism | kids_doodles (legacy)
+      style = '',           // alias for imagStyle
     } = await req.json()
+
+    // Normalize aliases
+    const _transcription = transcription || phrase
+    const _imagStyle = imagStyle || style
+
 
     const models = await getGeminiModels()
     console.log(`Using models: primary=${models.primary}, fallback=${models.fallback}, language=${language}, action=${action || 'score'}`)
@@ -282,7 +290,80 @@ No markdown, no explanation, just the JSON array.`
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
+    // ─── Imaginarium: generate image + 4 choices ─────────────────────────────
+    if (action === 'generate_imaginarium') {
+      if (!_transcription) throw new Error('phrase/transcription required for generate_imaginarium')
+
+      const STYLE_PROMPTS: Record<string, string> = {
+        crazy_dreams:   `surreal dream painting where bizarre dream imagery represents the concept of "${_transcription}". No text or labels. Style: Salvador Dali-inspired dreamscape.`,
+        abstractionism: `abstract expressionist artwork representing the concept of "${_transcription}". Bold shapes, vivid colors, no text. Style: Kandinsky / Mondrian.`,
+        kids_doodles:   `simple child's crayon drawing depicting "${_transcription}". Wobbly lines, bright crayons, naive style. No letters or text.`,
+      }
+
+      const stylePrompt = STYLE_PROMPTS[_imagStyle as string] || STYLE_PROMPTS['abstractionism']
+      const imageUrl = `${GEMINI_BASE_URL}/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`
+      const imageReq = {
+        contents: [{ parts: [{ text: `Create an illustration: ${stylePrompt}` }] }],
+        generationConfig: { responseModalities: ['IMAGE', 'TEXT'], temperature: 0.8 }
+      }
+
+      let imageBase64 = ''
+      let mimeType = 'image/png'
+      try {
+        const res = await fetch(imageUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(imageReq) })
+        const imgData = await res.json()
+        const parts = imgData?.candidates?.[0]?.content?.parts || []
+        const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'))
+        if (imgPart) {
+          imageBase64 = imgPart.inlineData.data
+          mimeType = imgPart.inlineData.mimeType
+        }
+      } catch (e: any) {
+        console.warn('Image generation failed, continuing without image:', e.message)
+      }
+
+      // Generate 4 choices (1 correct + 3 distractors)
+      const langLabel = language === 'ru' ? 'Russian' : 'English'
+      const choicePrompt = `The original phrase is: "${_transcription}".
+Generate exactly 4 options for a multiple-choice quiz, in ${langLabel}:
+- 1 option must be the EXACT original phrase (copy it verbatim)
+- 3 options must be plausible-sounding but INCORRECT alternatives (similar phonetically or thematically)
+IMPORTANT: all 4 options MUST be different from each other — no duplicates allowed.
+Respond ONLY with a JSON array of exactly 4 unique strings, randomly shuffled. Example: ["phrase A", "phrase B", "phrase C", "phrase D"]
+No markdown, no explanation, just the JSON array.`
+      const choiceReq = { contents: [{ parts: [{ text: choicePrompt }] }], generationConfig: { temperature: 1.0, maxOutputTokens: 300 } }
+      let choices: string[] = []
+      try {
+        let choiceData: any
+        try { choiceData = await callGemini(models.primary, choiceReq) }
+        catch { choiceData = await callGemini(models.fallback, choiceReq) }
+        const raw = choiceData?.candidates?.[0]?.content?.parts?.[0]?.text || '[]'
+        const match = raw.match(/\[[\s\S]*?\]/)
+        try { choices = JSON.parse(match ? match[0] : '[]') } catch { choices = [] }
+      } catch (e: any) {
+        console.warn('Choice generation failed:', e.message)
+      }
+
+      // Dedup and ensure correct answer is present
+      choices = [...new Set(choices.map((c: string) => String(c).trim()).filter(Boolean))]
+      if (!choices.includes(_transcription)) choices.unshift(_transcription)
+      const fallbacks = [
+        `(вариант А) ${_transcription.split(' ').reverse().join(' ')}`,
+        `(вариант Б) ${_transcription.slice(0, Math.ceil(_transcription.length / 2))}...`,
+        `(вариант В) ...${_transcription.slice(Math.floor(_transcription.length / 2))}`,
+      ]
+      for (const fb of fallbacks) {
+        if (choices.length >= 4) break
+        if (!choices.includes(fb)) choices.push(fb)
+      }
+      choices = choices.slice(0, 4).sort(() => Math.random() - 0.5)
+
+      return new Response(JSON.stringify({ imageBase64, mimeType, choices }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
     // ─────────────────────────────────────────────────────────────────────────
+
 
     if (only_transcribe) {
       if (!originalB64) throw new Error('Missing audio data for transcription')

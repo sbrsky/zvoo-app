@@ -4,7 +4,7 @@ import { useAuth } from '../hooks/useAuth'
 import { useRoom } from '../hooks/useRoom'
 import { useAudioEngine, MAX_RECORDING_SECONDS } from '../hooks/useAudioEngine'
 import { supabase } from '../lib/supabase'
-import { GAME_EVENTS, ROOM_STATUS } from '../lib/constants'
+import { GAME_EVENTS, ROOM_STATUS, GAME_TYPES } from '../lib/constants'
 import { scoreWithGemini, isGeminiAvailable, transcribeHostAudio } from '../lib/geminiScoring'
 import PlayerCard from '../components/PlayerCard'
 import AudioVisualizer from '../components/AudioVisualizer'
@@ -34,6 +34,8 @@ const PHASES = {
   GUEST_LISTEN:   'guest_listen',   // guesser listens to reversed audio
   GUEST_MIMIC:    'guest_mimic',    // guesser mimics the reversed audio
   GUEST_GUESS:    'guest_guess',    // guesser types their guess
+  IMAG_GENERATE:  'imag_generate',  // [Imaginarium] host generating image
+  IMAG_GUESS:     'imag_guess',     // [Imaginarium] guest sees image + 4 choices
   SCORING:        'scoring',        // AI scoring in progress
   RESULTS:        'results',        // single-round results (legacy compat)
   ROUND_RESULTS:  'round_results',  // between-round score display
@@ -50,11 +52,20 @@ const PHASE_STEPS = [
   { key: PHASES.ROUND_RESULTS, label: 'Итог',     icon: '🏆' },
 ]
 
-function PhaseBar({ phase }) {
-  const currentIdx = PHASE_STEPS.findIndex(s => s.key === phase)
+const IMAG_PHASE_STEPS = [
+  { key: PHASES.HOST_RECORD,   label: 'Фраза',   icon: '✍️' },
+  { key: PHASES.IMAG_GENERATE, label: 'ИИ',      icon: '🎨' },
+  { key: PHASES.IMAG_GUESS,    label: 'Угадай',  icon: '🖼️' },
+  { key: PHASES.SCORING,       label: 'Оценка',  icon: '⚖️' },
+  { key: PHASES.ROUND_RESULTS, label: 'Итог',    icon: '🏆' },
+]
+
+function PhaseBar({ phase, isImaginarium = false }) {
+  const steps = isImaginarium ? IMAG_PHASE_STEPS : PHASE_STEPS
+  const currentIdx = steps.findIndex(s => s.key === phase)
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 0, width: '100%' }}>
-      {PHASE_STEPS.map((step, i) => {
+      {steps.map((step, i) => {
         const done    = i < currentIdx
         const active  = i === currentIdx
         const pending = i > currentIdx
@@ -289,7 +300,15 @@ export default function Game() {
   const [slowMoSupported]                       = useState(() => supportsPlaybackRate())
   // ─────────────────────────────────────────────────────────────────────────
 
-  // AI quip cycling during scoring phase
+  // ─── Imaginarium state ────────────────────────────────────────────────────
+  const [hostPhraseText, setHostPhraseText]   = useState('')       // host types phrase here
+  const [imagGenerating, setImagGenerating]   = useState(false)    // loading: host generating image
+  const [imagImage, setImagImage]             = useState(null)     // base64 data URL
+  const [imagChoices, setImagChoices]         = useState(null)     // string[4] | null
+  const [imagSelected, setImagSelected]       = useState(null)     // guest's selected choice
+  const [imagPhrase, setImagPhrase]           = useState('')       // correct phrase (known to host)
+  // ─────────────────────────────────────────────────────────────────────────
+
   const [aiQuipIdx, setAiQuipIdx] = useState(0)
   useEffect(() => {
     if (phase !== PHASES.SCORING) return
@@ -313,18 +332,22 @@ export default function Game() {
   const phaseBgClass = {
     [PHASES.HOST_RECORD]:  'game-bg-record',
     [PHASES.GUEST_MIMIC]:  'game-bg-mimic',
-    [PHASES.GUEST_LISTEN]: 'game-bg-listen',
-    [PHASES.GUEST_GUESS]:  'game-bg-listen',
-    [PHASES.SCORING]:      'game-bg-scoring',
-    [PHASES.RESULTS]:      'game-bg-results',
-    [PHASES.ROUND_RESULTS]:'game-bg-results',
-    [PHASES.FINAL_RESULTS]:'game-bg-results',
+    [PHASES.GUEST_LISTEN]:   'game-bg-listen',
+    [PHASES.GUEST_GUESS]:     'game-bg-listen',
+    [PHASES.IMAG_GENERATE]:   'game-bg-scoring',
+    [PHASES.IMAG_GUESS]:      'game-bg-listen',
+    [PHASES.SCORING]:         'game-bg-scoring',
+    [PHASES.RESULTS]:         'game-bg-results',
+    [PHASES.ROUND_RESULTS]:   'game-bg-results',
+    [PHASES.FINAL_RESULTS]:   'game-bg-results',
   }[phase] || 'game-bg-default'
 
+  // Is this an Imaginarium game?
+  const isImaginarium = room?.game_type === GAME_TYPES.IMAGINARIUM
 
-  // Who records this round? Round 1 = host, Round 2 = guest, alternating
-  const isRecorder = currentRound % 2 === 1 ? isHost : isGuest
-  const isGuesser  = currentRound % 2 === 1 ? isGuest : isHost
+  // Who records this round? In Imaginarium host always "records" (types the phrase), guest always guesses
+  const isRecorder = isImaginarium ? isHost : (currentRound % 2 === 1 ? isHost : isGuest)
+  const isGuesser  = isImaginarium ? isGuest : (currentRound % 2 === 1 ? isGuest : isHost)
 
   // Fetch player profiles
   useEffect(() => {
@@ -512,6 +535,20 @@ export default function Game() {
       case GAME_EVENTS.GUESS_SUBMITTED:
         if (isRecorder) setPhase(PHASES.SCORING)
         break
+      // Imaginarium: host started generating — guest transitions to waiting screen
+      case GAME_EVENTS.IMAG_GENERATE:
+        if (isGuesser) setPhase(PHASES.IMAG_GENERATE)
+        break
+      // Imaginarium: host finished generating, sends image+choices to guest
+      case GAME_EVENTS.IMAG_READY:
+        if (isGuesser) {
+          if (gameState.imagImage) setImagImage(`data:${gameState.mimeType || 'image/png'};base64,${gameState.imagImage}`)
+          if (gameState.choices?.length) setImagChoices(gameState.choices)
+          if (gameState.phrase) setImagPhrase(gameState.phrase)
+          setPhase(PHASES.IMAG_GUESS)
+          playNotification('turnStart')
+        }
+        break
       case GAME_EVENTS.SHOW_RESULT: {
         setScore(gameState.score)
         setComment(gameState.comment)
@@ -545,6 +582,13 @@ export default function Game() {
         setSlowMoActive(false)
         setChoicesOptions(null)
         setVisionImage(null)
+        // Reset Imaginarium per-round state
+        setHostPhraseText('')
+        setImagGenerating(false)
+        setImagImage(null)
+        setImagChoices(null)
+        setImagSelected(null)
+        setImagPhrase('')
         setPhase(PHASES.HOST_RECORD)
         playNotification('turnStart')
         break
@@ -782,7 +826,6 @@ export default function Game() {
   }, [usedPowers.vision, maxPowers.vision, visionLoading, visionImage, actualTranscription, room?.game_language, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, updateSession, toast])
   // ─────────────────────────────────────────────────────────────────────────
 
-  const activeHandlerRef = useRef(null)
   const wasRecordingRef = useRef(false)
 
   // Watch audio.isRecording for auto-stop by timer
@@ -885,6 +928,118 @@ export default function Game() {
   const handleCancelGame = async () => {
     setShowCancelModal(true)
   }
+
+  // ─── Imaginarium: Host generates image from typed phrase ─────────────────
+  const handleImagGenerate = async () => {
+    const phrase = hostPhraseText.trim()
+    if (!phrase) return
+    setImagGenerating(true)
+    setImagPhrase(phrase)
+
+    // Transition host AND guest to generating phase
+    setPhase(PHASES.IMAG_GENERATE)
+    broadcastState(GAME_EVENTS.IMAG_GENERATE, {})
+
+    try {
+      const { data: { session: authSession } } = await supabase.auth.getSession()
+      const token = authSession?.access_token
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+      const res = await fetch(`${supabaseUrl}/functions/v1/gemini-scoring`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || anonKey}`,
+          'apikey': anonKey,
+        },
+        body: JSON.stringify({
+          action: 'generate_imaginarium',
+          phrase,
+          style: room?.imag_style || 'crazy_dreams',
+          language: room?.game_language || 'ru',
+        }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const { imageBase64, mimeType, choices } = await res.json()
+
+      // Host stores phrase in DB (for scoring reference)
+      await updateSession({ ai_actual_transcription: phrase })
+
+      // Set local state for host to see (optional preview)
+      if (imageBase64) setImagImage(`data:${mimeType || 'image/png'};base64,${imageBase64}`)
+      if (choices?.length) setImagChoices(choices)
+
+      // Broadcast to guest: send image + 4 choices
+      broadcastState(GAME_EVENTS.IMAG_READY, {
+        imagImage: imageBase64,
+        mimeType: mimeType || 'image/png',
+        choices: choices || [],
+        phrase: phrase,
+      })
+
+      setPhase(PHASES.IMAG_GUESS) // Host waits while guest guesses
+    } catch (err) {
+      console.error('handleImagGenerate error:', err)
+      toast.error('Не удалось сгенерировать картинку. Попробуй ещё раз.')
+      setPhase(PHASES.HOST_RECORD) // Go back to input on error
+    } finally {
+      setImagGenerating(false)
+    }
+  }
+
+  // ─── Imaginarium: Guest submits their guess (binary scoring) ─────────────
+  const submitImagGuess = async () => {
+    if (!imagSelected) return
+    setPendingSubmit(true)
+    try {
+      await updateSession({ guest_guess_text: imagSelected })
+      broadcastState(GAME_EVENTS.GUESS_SUBMITTED)
+      setPhase(PHASES.SCORING)
+
+      // Binary scoring: correct = 100, wrong = 0
+      const correct = imagSelected.trim().toLowerCase() === imagPhrase.trim().toLowerCase()
+      const score = correct ? 100 : 0
+      const comment = correct
+        ? '🎉 Правильно! Ты угадал образ!'
+        : `❌ Неверно. Правильный ответ: «${imagPhrase}»`
+
+      await updateSession({ ai_score: score, ai_comment: comment, ai_actual_transcription: imagPhrase })
+
+      const isLastRound = currentRound >= totalRounds
+      broadcastState(GAME_EVENTS.SHOW_RESULT, {
+        score,
+        comment,
+        breakdown: null,
+        actualTranscription: imagPhrase,
+        attemptTranscription: imagSelected,
+        guestGuessText: imagSelected,
+        roundNumber: currentRound,
+      })
+      setScore(score)
+      setComment(comment)
+      setActualTranscription(imagPhrase)
+      setAttemptTranscription(imagSelected)
+      setGuestGuessText(imagSelected)
+      const newEntry = { round: currentRound, score, comment }
+      setRoundScores(prev => [...prev, newEntry])
+
+      if (isLastRound) {
+        await updateRoomStatus(ROOM_STATUS.FINISHED)
+        await finalizeGame(score)
+      }
+
+      setPhase(isLastRound ? PHASES.FINAL_RESULTS : PHASES.ROUND_RESULTS)
+      if (score >= 60) setTimeout(() => launchConfetti(), 300)
+      playNotification('gameOver')
+    } catch (err) {
+      console.error('submitImagGuess error:', err)
+      toast.error('Ошибка при отправке ответа.')
+    } finally {
+      setPendingSubmit(false)
+      setScoring(false)
+    }
+  }
+  // ──────────────────────────────────────────────────────────────────────────
 
   const confirmCancelGame = async () => {
     setShowCancelModal(false)
@@ -1312,7 +1467,9 @@ export default function Game() {
     const titles = {
       [PHASES.WAITING]:        '⏳ Ожидание — ZVOO',
       [PHASES.READY]:          '✅ Готовы — ZVOO',
-      [PHASES.HOST_RECORD]:    isRecorder ? '🎙️ Твой ход! — ZVOO' : '⏳ Ход записывающего — ZVOO',
+      [PHASES.HOST_RECORD]:    isRecorder ? (isImaginarium ? '✍️ Введи фразу! — ZVOO' : '🎙️ Твой ход! — ZVOO') : '⏳ Ход записывающего — ZVOO',
+      [PHASES.IMAG_GENERATE]:  isRecorder ? '🎨 Генерирую... — ZVOO' : '⏳ Ожидание картинки — ZVOO',
+      [PHASES.IMAG_GUESS]:     isGuesser ? '🖼️ Угадай! — ZVOO' : '⏳ Гость угадывает — ZVOO',
       [PHASES.GUEST_LISTEN]:   isGuesser ? '🎧 Слушай! — ZVOO' : '⏳ Ход угадывающего — ZVOO',
       [PHASES.GUEST_MIMIC]:    isGuesser ? '🗣️ Повторяй! — ZVOO' : '⏳ Ход угадывающего — ZVOO',
       [PHASES.SCORING]:        '🤖 AI думает — ZVOO',
@@ -1347,7 +1504,9 @@ export default function Game() {
   const myStatus = {
     [PHASES.WAITING]:        isHost ? '📤 Отправь ссылку другу и жди подключения' : '⏳ Ждём начала игры...',
     [PHASES.READY]:          isHost ? '✅ Игрок подключён — нажми Начать' : '⏳ Ожидание хоста...',
-    [PHASES.HOST_RECORD]:    isRecorder ? `🎙️ Твой ход — запиши фразу${roundLabel}` : `⏳ Другой игрок записывает${roundLabel}`,
+    [PHASES.HOST_RECORD]:    isRecorder ? (isImaginarium ? `✍️ Твой ход — введи фразу${roundLabel}` : `🎙️ Твой ход — запиши фразу${roundLabel}`) : `⏳ Другой игрок записывает${roundLabel}`,
+    [PHASES.IMAG_GENERATE]:  isRecorder ? `🎨 ИИ создаёт картинку...` : `⏳ Ждём картинку от ИИ…`,
+    [PHASES.IMAG_GUESS]:     isGuesser ? `🖼️ Я угадываю — выбери вариант${roundLabel}` : `⏳ Гость угадывает фразу…`,
     [PHASES.GUEST_LISTEN]:   isGuesser ? `🎧 Твой ход — послушай реверс${roundLabel}` : `⏳ Угадывающий слушает${roundLabel}`,
     [PHASES.GUEST_MIMIC]:    isGuesser ? `🗣️ Твой ход — повтори звук!${roundLabel}` : `⏳ Угадывающий повторяет${roundLabel}`,
     [PHASES.GUEST_GUESS]:    isGuesser ? `🤔 Угадай что было сказано${roundLabel}` : `⏳ Угадывающий вводит ответ${roundLabel}`,
@@ -1357,10 +1516,12 @@ export default function Game() {
     [PHASES.RESULTS]:        '🏆 Игра завершена!',
   }
   const theirStatus = {
-    [PHASES.HOST_RECORD]:  isRecorder ? null : `⏳ Записывает фразу...`,
-    [PHASES.GUEST_LISTEN]: isGuesser ? null : `⏳ Слушает реверс...`,
-    [PHASES.GUEST_MIMIC]:  isGuesser ? null : `⏳ Записывает повтор...`,
-    [PHASES.GUEST_GUESS]:  isGuesser ? null : `⏳ Вводит ответ...`,
+    [PHASES.HOST_RECORD]:    isRecorder ? null : (isImaginarium ? '⏳ Хост вводит фразу...' : '⏳ Записывает фразу...'),
+    [PHASES.IMAG_GENERATE]:  '⏳ ИИ рисует картинку...',
+    [PHASES.IMAG_GUESS]:     isGuesser ? null : '⏳ Гость угадывает...',
+    [PHASES.GUEST_LISTEN]:   isGuesser ? null : '⏳ Слушает реверс...',
+    [PHASES.GUEST_MIMIC]:    isGuesser ? null : '⏳ Записывает повтор...',
+    [PHASES.GUEST_GUESS]:    isGuesser ? null : '⏳ Вводит ответ...',
   }
   const statusText = myStatus
 
@@ -1454,6 +1615,41 @@ export default function Game() {
         </div>
       )}
 
+      {/* ─── Imaginarium: image generating fullscreen loader ─── */}
+      {imagGenerating && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9990,
+          background: 'rgba(10,10,30,0.92)',
+          backdropFilter: 'blur(18px)',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          gap: '24px',
+        }}>
+          <div style={{ position: 'relative', width: '110px', height: '110px' }}>
+            <div style={{
+              position: 'absolute', inset: 0, borderRadius: '50%',
+              border: '3px solid transparent',
+              borderTopColor: '#A78BFA', borderRightColor: '#7C3AED',
+              animation: 'spin 1s linear infinite',
+            }} />
+            <div style={{
+              position: 'absolute', inset: '14px', borderRadius: '50%',
+              border: '2px solid transparent', borderTopColor: '#6D28D9',
+              animation: 'spin 1.6s linear infinite reverse',
+            }} />
+            <div style={{
+              position: 'absolute', inset: '32px', borderRadius: '50%',
+              background: 'linear-gradient(135deg, rgba(124,58,237,0.4), rgba(167,139,250,0.2))',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px',
+            }}>🎨</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <p style={{ fontSize: '20px', fontWeight: 700, color: '#A78BFA', margin: '0 0 8px' }}>ИИ рисует картинку...</p>
+            <p style={{ fontSize: '14px', color: 'rgba(255,255,255,0.4)', margin: 0 }}>Генерируем образ и варианты ответа — подождите!</p>
+          </div>
+        </div>
+      )}
+
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
         {/* Phase progress bar */}
@@ -1463,7 +1659,7 @@ export default function Game() {
           background: 'rgba(255,255,255,0.03)',
           border: '1px solid rgba(255,255,255,0.07)',
         }}>
-          <PhaseBar phase={phase} />
+          <PhaseBar phase={phase} isImaginarium={isImaginarium} />
         </div>
 
         {/* Status cards — my turn vs their turn */}
@@ -1474,12 +1670,12 @@ export default function Game() {
             borderRadius: '16px',
             background: [PHASES.RESULTS, PHASES.ROUND_RESULTS, PHASES.FINAL_RESULTS].includes(phase)
               ? 'rgba(16,185,129,0.08)'
-              : (isRecorder && [PHASES.HOST_RECORD].includes(phase)) || (isGuesser && [PHASES.GUEST_LISTEN, PHASES.GUEST_MIMIC].includes(phase))
+              : (isRecorder && [PHASES.HOST_RECORD, PHASES.IMAG_GENERATE].includes(phase)) || (isGuesser && [PHASES.GUEST_LISTEN, PHASES.GUEST_MIMIC, PHASES.IMAG_GUESS].includes(phase))
                 ? 'rgba(124,58,237,0.12)'
                 : 'rgba(255,255,255,0.03)',
             border: `1px solid ${
               [PHASES.RESULTS, PHASES.ROUND_RESULTS, PHASES.FINAL_RESULTS].includes(phase) ? 'rgba(16,185,129,0.25)'
-              : (isRecorder && [PHASES.HOST_RECORD].includes(phase)) || (isGuesser && [PHASES.GUEST_LISTEN, PHASES.GUEST_MIMIC].includes(phase))
+              : (isRecorder && [PHASES.HOST_RECORD, PHASES.IMAG_GENERATE].includes(phase)) || (isGuesser && [PHASES.GUEST_LISTEN, PHASES.GUEST_MIMIC, PHASES.IMAG_GUESS].includes(phase))
                 ? 'rgba(124,58,237,0.35)'
                 : 'rgba(255,255,255,0.07)'
             }`,
@@ -1691,7 +1887,7 @@ export default function Game() {
           )}
 
           {/* RECORDER — record controls */}
-          {isRecorder && phase === PHASES.HOST_RECORD && !audio.isRecording && !uploading && (
+          {isRecorder && phase === PHASES.HOST_RECORD && !audio.isRecording && !uploading && !isImaginarium && (
             <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
               <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)', margin: '0 0 8px' }}>
                 Скажи любую фразу. Система перевернёт её задом наперёд.
@@ -1703,6 +1899,132 @@ export default function Game() {
             </div>
 
           )}
+
+          {/* IMAGINARIUM: host types phrase + Generate */}
+          {isImaginarium && isRecorder && phase === PHASES.HOST_RECORD && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)', margin: 0, textAlign: 'center' }}>
+                Введи слово или фразу — ИИ нарисует картинку по ней в стиле <strong style={{ color: '#A78BFA' }}>{room?.imag_style?.replace('_', ' ') || '...'}</strong>
+              </p>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <input
+                  id="imag-phrase-input"
+                  type="text"
+                  placeholder="Например: закат в горах"
+                  value={hostPhraseText}
+                  onChange={e => setHostPhraseText(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && hostPhraseText.trim()) handleImagGenerate() }}
+                  maxLength={80}
+                  style={{
+                    flex: 1, padding: '14px 18px', borderRadius: '14px', fontSize: '16px',
+                    background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(124,58,237,0.35)',
+                    color: 'white', outline: 'none',
+                    boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.3)',
+                  }}
+                />
+                <ActionButton
+                  onClick={handleImagGenerate}
+                  disabled={!hostPhraseText.trim()}
+                  variant="primary"
+                >
+                  🎨 Создать
+                </ActionButton>
+              </div>
+            </div>
+          )}
+
+          {/* IMAGINARIUM: guest waiting while host generates */}
+          {isImaginarium && isGuesser && phase === PHASES.IMAG_GENERATE && (
+            <div style={{
+              padding: '32px 24px', borderRadius: '20px', textAlign: 'center',
+              background: 'linear-gradient(135deg, rgba(124,58,237,0.1), rgba(6,182,212,0.06))',
+              border: '1px solid rgba(124,58,237,0.2)',
+            }}>
+              <div style={{ fontSize: '48px', marginBottom: '12px', animation: 'spin 2s linear infinite' }}>🎨</div>
+              <div style={{ fontSize: '18px', fontWeight: 700, color: 'white', marginBottom: '8px' }}>ИИ рисует картинку...</div>
+              <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>Скоро появятся варианты ответов</div>
+            </div>
+          )}
+
+          {/* IMAGINARIUM: generating overlay indicator for host */}
+          {isImaginarium && isRecorder && phase === PHASES.IMAG_GUESS && (
+            <div style={{
+              padding: '24px', borderRadius: '20px', textAlign: 'center',
+              background: 'linear-gradient(135deg, rgba(124,58,237,0.1), rgba(6,182,212,0.06))',
+              border: '1px solid rgba(124,58,237,0.2)',
+            }}>
+              <div style={{ fontSize: '40px', marginBottom: '12px' }}>🖼️</div>
+              <div style={{ fontSize: '16px', fontWeight: 700, color: 'white', marginBottom: '6px' }}>Гость угадывает</div>
+              <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>Загаданная фраза: <span style={{ color: '#A78BFA', fontWeight: 700 }}>«{imagPhrase}»</span></div>
+            </div>
+          )}
+
+          {/* IMAGINARIUM GUESSER: image + 4 choices */}
+          {isImaginarium && isGuesser && phase === PHASES.IMAG_GUESS && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {imagImage && (
+                <div style={{
+                  borderRadius: '20px', overflow: 'hidden',
+                  border: '1px solid rgba(124,58,237,0.3)',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                }}>
+                  <img
+                    src={imagImage}
+                    alt="Угадай фразу"
+                    style={{ width: '100%', display: 'block', maxHeight: '320px', objectFit: 'cover' }}
+                  />
+                </div>
+              )}
+              {!imagImage && (
+                <div style={{
+                  height: '200px', borderRadius: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.2)',
+                }}>
+                  <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.35)' }}>
+                    <div style={{ fontSize: '40px', marginBottom: '8px' }}>🎨</div>
+                    <div>Изображение загружается...</div>
+                  </div>
+                </div>
+              )}
+              <p style={{ margin: 0, textAlign: 'center', fontSize: '14px', color: 'rgba(255,255,255,0.5)' }}>
+                Какая фраза изображена на картинке?
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {(imagChoices || []).map((choice, i) => (
+                  <button
+                    key={i}
+                    id={`imag-choice-${i}`}
+                    onClick={() => setImagSelected(choice)}
+                    style={{
+                      padding: '14px 20px', borderRadius: '14px', textAlign: 'left',
+                      fontSize: '15px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
+                      border: imagSelected === choice
+                        ? '2px solid #A78BFA'
+                        : '1px solid rgba(255,255,255,0.1)',
+                      background: imagSelected === choice
+                        ? 'rgba(124,58,237,0.25)'
+                        : 'rgba(255,255,255,0.04)',
+                      color: imagSelected === choice ? '#E9D5FF' : 'rgba(255,255,255,0.75)',
+                      boxShadow: imagSelected === choice ? '0 0 0 1px rgba(167,139,250,0.4)' : 'none',
+                    }}
+                  >
+                    <span style={{ opacity: 0.5, marginRight: '10px' }}>{String.fromCharCode(65 + i)})</span>
+                    {choice}
+                  </button>
+                ))}
+              </div>
+              <ActionButton
+                onClick={submitImagGuess}
+                disabled={!imagSelected}
+                pending={pendingSubmit}
+                pendingLabel="Отправляем..."
+                variant="primary"
+              >
+                ✅ Подтвердить выбор
+              </ActionButton>
+            </div>
+          )}
+
           {isRecorder && audio.isRecording && (
 
             <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
@@ -1867,8 +2189,8 @@ export default function Game() {
             </div>
           )}
 
-          {/* GUEST_GUESS */}
-          {isGuesser && phase === PHASES.GUEST_GUESS && (
+          {/* GUEST_GUESS — only for Classic mode */}
+          {isGuesser && phase === PHASES.GUEST_GUESS && !isImaginarium && (
             <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '16px', width: '100%' }}>
               <p style={{ fontSize: '14px', color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>Теперь послушай, что получилось!</p>
               <ActionButton onClick={handlePlayMimicReversed} disabled={audio.isPlaying || uploading} variant="cyan">

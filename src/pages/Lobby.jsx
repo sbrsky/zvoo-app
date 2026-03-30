@@ -9,6 +9,7 @@ import { BtnSpinner } from '../components/BtnSpinner'
 import { LANGUAGES, DEFAULT_LANGUAGE_ID } from '../lib/languages'
 import { SUPERPOWERS } from '../lib/superpowers'
 import { UserProfileDrawer } from '../components/UserProfileDrawer'
+import { GAME_TYPES, IMAGINARIUM_STYLES } from '../lib/constants'
 
 export default function Lobby() {
   const { user, profile } = useAuth()
@@ -26,6 +27,10 @@ export default function Lobby() {
   const [selectedLang, setSelectedLang] = useState(DEFAULT_LANGUAGE_ID)
   // Superpower caps: { slow: 1, choices: 1, vision: 1 }
   const [spConfig, setSpConfig] = useState({ slow: 1, choices: 1, vision: 1 })
+  // Game type
+  const [selectedGameType, setSelectedGameType] = useState(GAME_TYPES.CLASSIC)
+  const [selectedImagStyle, setSelectedImagStyle] = useState(IMAGINARIUM_STYLES[0].id)
+  const [pickerStep, setPickerStep] = useState(1) // 1 = game type, 2 = style (imaginarium only), 3 = rounds
   const navigate = useNavigate()
   const toast = useToast()
   const [drawerUserId, setDrawerUserId] = useState(null)
@@ -99,6 +104,7 @@ export default function Lobby() {
 
   const createRoom = useCallback(async (totalRounds = 3) => {
     setPendingRounds(totalRounds)
+    const isImag = selectedGameType === GAME_TYPES.IMAGINARIUM
     try {
       const { data, error } = await supabase
         .from('rooms')
@@ -106,14 +112,17 @@ export default function Lobby() {
           host_id: user.id,
           total_rounds: totalRounds,
           game_language: selectedLang,
-          sp_slow_max:    spConfig.slow,
-          sp_choices_max: spConfig.choices,
-          sp_vision_max:  spConfig.vision,
+          game_type: selectedGameType,
+          imag_style: isImag ? selectedImagStyle : null,
+          sp_slow_max:    isImag ? 0 : spConfig.slow,
+          sp_choices_max: isImag ? 0 : spConfig.choices,
+          sp_vision_max:  isImag ? 0 : spConfig.vision,
         })
         .select()
         .single()
       if (error) throw error
       setShowRoundPicker(false)
+      setPickerStep(1)
       toast.success('Комната создана! Ждём соперника...')
       navigate(`/game/${data.id}`)
     } catch (err) {
@@ -123,7 +132,7 @@ export default function Lobby() {
       setPendingRounds(null)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, navigate, selectedLang, spConfig])
+  }, [user?.id, navigate, selectedLang, spConfig, selectedGameType, selectedImagStyle])
 
   // useAsyncButton for the "+ Создать комнату" header button (opens picker)
   const openPickerBtn = useAsyncButton(() => {
@@ -310,7 +319,25 @@ export default function Lobby() {
                         {room.host?.username?.[0]?.toUpperCase() || '?'}
                       </div>
                       <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          {/* Game type badge */}
+                          {room.game_type === GAME_TYPES.IMAGINARIUM ? (
+                            <span style={{
+                              fontSize: '11px', padding: '2px 8px', borderRadius: '100px',
+                              background: 'rgba(139,92,246,0.2)', color: '#C4B5FD',
+                              fontWeight: 700, border: '1px solid rgba(139,92,246,0.35)',
+                            }}>
+                              🎨 Imaginarium
+                            </span>
+                          ) : (
+                            <span style={{
+                              fontSize: '11px', padding: '2px 8px', borderRadius: '100px',
+                              background: 'rgba(20,122,138,0.2)', color: '#4DD9C8',
+                              fontWeight: 700, border: '1px solid rgba(20,122,138,0.35)',
+                            }}>
+                              🎧 Classic
+                            </span>
+                          )}
                           <button
                             onClick={e => { e.stopPropagation(); room.host_id && setDrawerUserId(room.host_id) }}
                             style={{
@@ -498,125 +525,213 @@ export default function Lobby() {
     {showRoundPicker && (
       <div style={{
         position: 'fixed', inset: 0, zIndex: 9999,
-        background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)',
+        background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(10px)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
       }}>
         <div style={{
-          background: 'rgba(30,30,40,0.95)', border: '1px solid rgba(255,255,255,0.1)',
-          borderRadius: '24px', padding: '32px', textAlign: 'center', maxWidth: '420px', width: '100%',
-          boxShadow: '0 25px 50px -12px rgba(0,0,0,0.8)',
+          background: 'rgba(18,18,28,0.97)', border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: '24px', padding: '32px', textAlign: 'center', maxWidth: '460px', width: '100%',
+          boxShadow: '0 25px 50px -12px rgba(0,0,0,0.9)',
         }}>
-          <h3 style={{ margin: '0 0 8px', fontSize: '22px', color: '#fff' }}>🎮 Новая игра</h3>
-          <p style={{ margin: '0 0 20px', fontSize: '14px', color: 'rgba(255,255,255,0.5)' }}>
-            Настрой параметры и начни!
-          </p>
 
-          {/* Language picker */}
-          <div style={{ marginBottom: '24px', textAlign: 'left' }}>
-            <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.35)', margin: '0 0 10px' }}>
-              Язык игры
-            </p>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
-              {LANGUAGES.map(lang => (
-                <button
-                  key={lang.id}
-                  onClick={() => setSelectedLang(lang.id)}
-                  style={{
-                    padding: '10px 18px', borderRadius: '14px', border: 'none',
-                    cursor: 'pointer', fontWeight: 700, fontSize: '14px',
-                    display: 'flex', alignItems: 'center', gap: '8px',
-                    transition: 'all 0.18s',
-                    background: selectedLang === lang.id
-                      ? 'linear-gradient(135deg, #147A8A, #2DC4B2)'
-                      : 'rgba(255,255,255,0.07)',
-                    color: selectedLang === lang.id ? 'white' : 'rgba(255,255,255,0.55)',
-                    boxShadow: selectedLang === lang.id ? '0 4px 16px rgba(124,58,237,0.35)' : 'none',
-                    outline: selectedLang === lang.id ? '2px solid rgba(124,58,237,0.4)' : '2px solid transparent',
-                  }}
-                >
-                  <span style={{ fontSize: '18px' }}>{lang.flag}</span>
-                  {lang.nativeName}
-                </button>
-              ))}
-            </div>
+          {/* Step indicator */}
+          <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', marginBottom: '24px' }}>
+            {[1, 2, 3].map(step => (
+              <div key={step} style={{
+                height: '4px', borderRadius: '2px', flex: 1,
+                background: step <= pickerStep ? 'linear-gradient(90deg, #147A8A, #2DC4B2)' : 'rgba(255,255,255,0.1)',
+                transition: 'background 0.3s',
+              }} />
+            ))}
           </div>
 
-          {/* Superpower config */}
-          <div style={{ marginBottom: '24px', textAlign: 'left' }}>
-            <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.35)', margin: '0 0 12px' }}>
-              ⚡ Супер Силы (зарядов на игру)
-            </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {SUPERPOWERS.map(sp => (
-                <div key={sp.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '14px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
-                  <span style={{ fontSize: '20px', flexShrink: 0 }}>{sp.icon}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: 'white' }}>{sp.name}</div>
-                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sp.shortDesc}</div>
-                  </div>
-                  {/* Counter buttons */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-                    <button
-                      onClick={() => setSpConfig(p => ({ ...p, [sp.id]: Math.max(0, p[sp.id] - 1) }))}
-                      style={{ width: '28px', height: '28px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,0.08)', color: 'white', fontSize: '16px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
-                    >−</button>
-                    <span style={{ width: '24px', textAlign: 'center', fontSize: '16px', fontWeight: 800,
-                      color: spConfig[sp.id] === 0 ? 'rgba(255,255,255,0.2)' : sp.color
-                    }}>{spConfig[sp.id]}</span>
-                    <button
-                      onClick={() => setSpConfig(p => ({ ...p, [sp.id]: Math.min(3, p[sp.id] + 1) }))}
-                      style={{ width: '28px', height: '28px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,0.08)', color: 'white', fontSize: '16px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
-                    >+</button>
+          {/* ── STEP 1: Game type ── */}
+          {pickerStep === 1 && (
+            <>
+              <h3 style={{ margin: '0 0 6px', fontSize: '22px', color: '#fff' }}>🎮 Тип игры</h3>
+              <p style={{ margin: '0 0 24px', fontSize: '14px', color: 'rgba(255,255,255,0.45)' }}>Выбери формат</p>
+              <div style={{ display: 'flex', gap: '14px', marginBottom: '28px' }}>
+                {[
+                  { type: GAME_TYPES.CLASSIC, icon: '🎧', label: 'Classic', desc: 'Запись голоса → реверс → угадай' },
+                  { type: GAME_TYPES.IMAGINARIUM, icon: '🎨', label: 'Imaginarium', desc: 'AI рисует по фразе → угадай что нарисовано' },
+                ].map(({ type, icon, label, desc }) => (
+                  <button
+                    key={type}
+                    onClick={() => {
+                      setSelectedGameType(type)
+                      setPickerStep(type === GAME_TYPES.IMAGINARIUM ? 2 : 3)
+                    }}
+                    style={{
+                      flex: 1, padding: '20px 14px', borderRadius: '18px', border: 'none',
+                      cursor: 'pointer', textAlign: 'center', transition: 'all 0.2s',
+                      background: selectedGameType === type
+                        ? type === GAME_TYPES.IMAGINARIUM
+                          ? 'linear-gradient(135deg, rgba(139,92,246,0.3), rgba(124,58,237,0.15))'
+                          : 'linear-gradient(135deg, rgba(20,122,138,0.35), rgba(45,196,178,0.15))'
+                        : 'rgba(255,255,255,0.04)',
+                      border: `2px solid ${
+                        selectedGameType === type
+                          ? type === GAME_TYPES.IMAGINARIUM ? 'rgba(139,92,246,0.6)' : 'rgba(45,196,178,0.6)'
+                          : 'rgba(255,255,255,0.08)'
+                      }`,
+                      boxShadow: selectedGameType === type ? '0 8px 24px rgba(0,0,0,0.3)' : 'none',
+                    }}
+                  >
+                    <div style={{ fontSize: '36px', marginBottom: '10px' }}>{icon}</div>
+                    <div style={{ fontSize: '16px', fontWeight: 800, color: 'white', marginBottom: '6px' }}>{label}</div>
+                    <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', lineHeight: 1.4 }}>{desc}</div>
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={() => { setShowRoundPicker(false); setPickerStep(1) }}
+                style={{
+                  padding: '10px 24px', borderRadius: '12px',
+                  border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)',
+                  color: 'rgba(255,255,255,0.5)', fontWeight: 600, fontSize: '14px', cursor: 'pointer',
+                }}
+              >Отмена</button>
+            </>
+          )}
+
+          {/* ── STEP 2: Imaginarium style ── */}
+          {pickerStep === 2 && (
+            <>
+              <h3 style={{ margin: '0 0 6px', fontSize: '22px', color: '#fff' }}>🎨 Стиль Imaginarium</h3>
+              <p style={{ margin: '0 0 20px', fontSize: '14px', color: 'rgba(255,255,255,0.45)' }}>В каком стиле AI нарисует картинку?</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '24px' }}>
+                {IMAGINARIUM_STYLES.map(style => (
+                  <button
+                    key={style.id}
+                    onClick={() => setSelectedImagStyle(style.id)}
+                    style={{
+                      padding: '16px 20px', borderRadius: '16px', border: 'none',
+                      cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s',
+                      display: 'flex', alignItems: 'center', gap: '16px',
+                      background: selectedImagStyle === style.id
+                        ? `linear-gradient(135deg, ${style.color}30, ${style.color}10)`
+                        : 'rgba(255,255,255,0.04)',
+                      border: `2px solid ${selectedImagStyle === style.id ? style.color + '80' : 'rgba(255,255,255,0.08)'}`,
+                    }}
+                  >
+                    <span style={{ fontSize: '32px', flexShrink: 0 }}>{style.icon}</span>
+                    <div>
+                      <div style={{ fontSize: '15px', fontWeight: 700, color: 'white', marginBottom: '3px' }}>{style.name}</div>
+                      <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>{style.description}</div>
+                    </div>
+                    {selectedImagStyle === style.id && (
+                      <span style={{ marginLeft: 'auto', color: style.color, fontSize: '18px' }}>✓</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  onClick={() => setPickerStep(1)}
+                  style={{
+                    flex: 1, padding: '12px', borderRadius: '12px',
+                    border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)',
+                    color: 'rgba(255,255,255,0.5)', fontWeight: 600, fontSize: '14px', cursor: 'pointer',
+                  }}
+                >← Назад</button>
+                <button
+                  onClick={() => setPickerStep(3)}
+                  style={{
+                    flex: 2, padding: '12px', borderRadius: '12px', border: 'none',
+                    background: 'linear-gradient(135deg, #8B5CF6, #6D28D9)',
+                    color: 'white', fontWeight: 700, fontSize: '14px', cursor: 'pointer',
+                    boxShadow: '0 4px 16px rgba(139,92,246,0.4)',
+                  }}
+                >Далее →</button>
+              </div>
+            </>
+          )}
+
+          {/* ── STEP 3: Language + (if Classic) Superpowers + Rounds ── */}
+          {pickerStep === 3 && (
+            <>
+              <h3 style={{ margin: '0 0 6px', fontSize: '22px', color: '#fff' }}>⚙️ Настройки</h3>
+              <p style={{ margin: '0 0 20px', fontSize: '14px', color: 'rgba(255,255,255,0.45)' }}>Язык и количество раундов</p>
+
+              {/* Language */}
+              <div style={{ marginBottom: '20px', textAlign: 'left' }}>
+                <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.35)', margin: '0 0 10px' }}>Язык игры</p>
+                <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                  {LANGUAGES.map(lang => (
+                    <button key={lang.id} onClick={() => setSelectedLang(lang.id)} style={{
+                      padding: '10px 18px', borderRadius: '14px', border: 'none',
+                      cursor: 'pointer', fontWeight: 700, fontSize: '14px',
+                      display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.18s',
+                      background: selectedLang === lang.id ? 'linear-gradient(135deg, #147A8A, #2DC4B2)' : 'rgba(255,255,255,0.07)',
+                      color: selectedLang === lang.id ? 'white' : 'rgba(255,255,255,0.55)',
+                      boxShadow: selectedLang === lang.id ? '0 4px 16px rgba(124,58,237,0.35)' : 'none',
+                    }}>
+                      <span style={{ fontSize: '18px' }}>{lang.flag}</span>
+                      {lang.nativeName}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Superpowers — Classic only */}
+              {selectedGameType === GAME_TYPES.CLASSIC && (
+                <div style={{ marginBottom: '20px', textAlign: 'left' }}>
+                  <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.35)', margin: '0 0 12px' }}>⚡ Супер Силы (зарядов на игру)</p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {SUPERPOWERS.map(sp => (
+                      <div key={sp.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '14px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                        <span style={{ fontSize: '20px', flexShrink: 0 }}>{sp.icon}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'white' }}>{sp.name}</div>
+                          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sp.shortDesc}</div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                          <button onClick={() => setSpConfig(p => ({ ...p, [sp.id]: Math.max(0, p[sp.id] - 1) }))} style={{ width: '28px', height: '28px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,0.08)', color: 'white', fontSize: '16px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
+                          <span style={{ width: '24px', textAlign: 'center', fontSize: '16px', fontWeight: 800, color: spConfig[sp.id] === 0 ? 'rgba(255,255,255,0.2)' : sp.color }}>{spConfig[sp.id]}</span>
+                          <button onClick={() => setSpConfig(p => ({ ...p, [sp.id]: Math.min(3, p[sp.id] + 1) }))} style={{ width: '28px', height: '28px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,0.08)', color: 'white', fontSize: '16px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              ))}
-            </div>
-          </div>
+              )}
 
-          <p style={{ margin: '0 0 14px', fontSize: '13px', color: 'rgba(255,255,255,0.4)' }}>
-            Выбери количество раундов
-          </p>
-          <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginBottom: '24px' }}>
-            {[2, 4, 6].map(n => {
-              const isPending = pendingRounds === n
-              const isOtherPending = pendingRounds !== null && pendingRounds !== n
-              return (
-                <button
-                  key={n}
-                  onClick={() => createRoom(n)}
-                  disabled={pendingRounds !== null}
-                  className={`btn-game ${isPending ? 'btn-pending' : ''}`}
-                  style={{
-                    width: '90px', padding: '20px 0', borderRadius: '18px', border: 'none',
-                    background: isPending
-                      ? 'linear-gradient(135deg, #147A8A, #2DC4B2)'
-                      : 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(6,182,212,0.2))',
-                    boxShadow: isPending ? '0 8px 30px rgba(124,58,237,0.4)' : 'none',
-                    opacity: isOtherPending ? 0.4 : 1,
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
-                    position: 'relative', overflow: 'hidden',
-                  }}
-                >
-                  {isPending ? (
-                    <><BtnSpinner size={22} /><span style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.7)' }}>Создаём...</span></>
-                  ) : (
-                    <><span style={{ fontSize: '28px', fontWeight: 900, color: '#fff' }}>{n}</span><span style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.5)' }}>раунд{n === 2 ? 'а' : 'ов'}</span></>
-                  )}
-                </button>
-              )
-            })}
-          </div>
-          <button
-            onClick={() => setShowRoundPicker(false)}
-            style={{
-              padding: '10px 24px', borderRadius: '12px',
-              border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)',
-              color: 'rgba(255,255,255,0.6)', fontWeight: 600, fontSize: '14px',
-              cursor: 'pointer', transition: 'all 0.2s',
-            }}
-          >
-            Отмена
-          </button>
+              {/* Rounds */}
+              <p style={{ margin: '0 0 12px', fontSize: '13px', color: 'rgba(255,255,255,0.4)' }}>Количество раундов</p>
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginBottom: '24px' }}>
+                {[2, 4, 6].map(n => {
+                  const isPending = pendingRounds === n
+                  const isOtherPending = pendingRounds !== null && pendingRounds !== n
+                  return (
+                    <button key={n} onClick={() => createRoom(n)} disabled={pendingRounds !== null}
+                      className={`btn-game ${isPending ? 'btn-pending' : ''}`}
+                      style={{
+                        width: '90px', padding: '20px 0', borderRadius: '18px', border: 'none',
+                        background: isPending
+                          ? 'linear-gradient(135deg, #147A8A, #2DC4B2)'
+                          : 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(6,182,212,0.2))',
+                        boxShadow: isPending ? '0 8px 30px rgba(124,58,237,0.4)' : 'none',
+                        opacity: isOtherPending ? 0.4 : 1,
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
+                      }}
+                    >
+                      {isPending
+                        ? <><BtnSpinner size={22} /><span style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.7)' }}>Создаём...</span></>
+                        : <><span style={{ fontSize: '28px', fontWeight: 900, color: '#fff' }}>{n}</span><span style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.5)' }}>раунд{n === 2 ? 'а' : 'ов'}</span></>}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <button onClick={() => setPickerStep(selectedGameType === GAME_TYPES.IMAGINARIUM ? 2 : 1)}
+                style={{
+                  padding: '10px 24px', borderRadius: '12px',
+                  border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)',
+                  color: 'rgba(255,255,255,0.5)', fontWeight: 600, fontSize: '14px', cursor: 'pointer',
+                }}
+              >← Назад</button>
+            </>
+          )}
         </div>
       </div>
     )}
