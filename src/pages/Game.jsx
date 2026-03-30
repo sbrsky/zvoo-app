@@ -640,6 +640,21 @@ export default function Game() {
     }, 3000)
   }, [])
 
+  // ─── Play reversed audio (used by button + SlowMo) ─────────────────────────
+  const handlePlayReversed = useCallback(async (playbackRate = 1.0) => {
+    const { data: session } = await supabase
+      .from('game_sessions').select('reversed_audio_url').eq('room_id', roomId)
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const url = session?.reversed_audio_url || gameSession?.reversed_audio_url
+    if (url) {
+      const { data: fileData } = await supabase.storage.from('audio').download(url)
+      if (fileData) {
+        audio.playAudio(fileData, playbackRate)
+        setHasListened(true)
+      }
+    }
+  }, [roomId, gameSession?.reversed_audio_url, audio])
+
   // ─── Superpower handlers ──────────────────────────────────────────────────
   const { VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY } = import.meta.env
 
@@ -855,19 +870,6 @@ export default function Game() {
     return () => { cancelled = true }
   }, [phase, isGuesser, roomId])
 
-  const handlePlayReversed = async (playbackRate = 1.0) => {
-    const { data: session } = await supabase
-      .from('game_sessions').select('reversed_audio_url').eq('room_id', roomId)
-      .order('created_at', { ascending: false }).limit(1).maybeSingle()
-    const url = session?.reversed_audio_url || gameSession?.reversed_audio_url
-    if (url) {
-      const { data: fileData } = await supabase.storage.from('audio').download(url)
-      if (fileData) {
-        audio.playAudio(fileData, playbackRate)
-        setHasListened(true)
-      }
-    }
-  }
 
   const doProcessMimic = async (mimicBlob) => {
     if (!mimicBlob || mimicBlob.size === 0) {

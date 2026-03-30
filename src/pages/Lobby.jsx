@@ -14,6 +14,7 @@ export default function Lobby() {
   const { onlineUsers } = usePresence('lobby', { id: user?.id, username: profile?.username, avatar_url: profile?.avatar_url })
   const [rooms, setRooms] = useState([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [copied, setCopied] = useState(null)
   const [showRoundPicker, setShowRoundPicker] = useState(false)
   const [pendingRounds, setPendingRounds] = useState(null)
@@ -43,7 +44,8 @@ export default function Lobby() {
     return () => supabase.removeChannel(channel)
   }, [])
 
-  async function fetchRooms() {
+  async function fetchRooms(manual = false) {
+    if (manual) setRefreshing(true)
     const { data } = await supabase
       .from('rooms')
       .select('*, host:profiles!rooms_host_id_fkey(*), guest:profiles!rooms_guest_id_fkey(*)')
@@ -51,6 +53,7 @@ export default function Lobby() {
       .order('created_at', { ascending: false })
     setRooms(data || [])
     setLoading(false)
+    if (manual) setTimeout(() => setRefreshing(false), 400)
   }
 
   const createRoom = useCallback(async (totalRounds = 3) => {
@@ -95,6 +98,7 @@ export default function Lobby() {
 
   return (
     <>
+    <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     <div style={{ minHeight: '100vh', padding: '96px 20px 60px', maxWidth: '1140px', margin: '0 auto' }}>
 
       {/* Ambient */}
@@ -168,9 +172,31 @@ export default function Lobby() {
 
         {/* Rooms list */}
         <div>
-          <p style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.12em', color: 'rgba(255,255,255,0.35)', marginBottom: '16px', textTransform: 'uppercase' }}>
-            Доступные комнаты
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <p style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.12em', color: 'rgba(255,255,255,0.35)', margin: 0, textTransform: 'uppercase' }}>
+              Доступные комнаты
+            </p>
+            <button
+              onClick={() => fetchRooms(true)}
+              disabled={refreshing}
+              title="Обновить список комнат"
+              style={{
+                background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: '10px', padding: '6px 10px', cursor: 'pointer',
+                color: 'rgba(255,255,255,0.5)', fontSize: '15px', lineHeight: 1,
+                transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px',
+              }}
+              onMouseOver={e => { if (!refreshing) e.currentTarget.style.background = 'rgba(255,255,255,0.1)' }}
+              onMouseOut={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+            >
+              <span style={{
+                display: 'inline-block',
+                animation: refreshing ? 'spin 0.6s linear infinite' : 'none',
+                fontSize: '14px',
+              }}>🔄</span>
+              <span style={{ fontSize: '11px', fontWeight: 600 }}>Обновить</span>
+            </button>
+          </div>
 
           {loading ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
