@@ -14,24 +14,23 @@ describe('Dashboard game history', () => {
   })
 
   it('fetches finished rooms for current user', () => {
-    expect(dashContent).toContain("eq('status', 'finished')")
-    expect(dashContent).toContain('host_id')
-    expect(dashContent).toContain('guest_id')
+    expect(dashContent).toContain("finished_games")
+    expect(dashContent).toContain("limit(10)")
   })
 
   it('fetches game_sessions with ai_score', () => {
-    expect(dashContent).toContain('game_sessions')
-    expect(dashContent).toContain('ai_score')
+    // Score is now coming directly from finished_games view
+    expect(dashContent).toContain('score')
+    expect(dashContent).toContain('theirScore')
   })
 
   it('resolves opponent profiles', () => {
-    expect(dashContent).toContain('opponentMap')
     expect(dashContent).toContain('opponent')
   })
 
   it('renders game list items with score badges', () => {
     expect(dashContent).toContain('game.score')
-    expect(dashContent).toContain('vs {game.opponent}')
+    expect(dashContent).toContain('game.opponent')
   })
 
   it('shows loading state', () => {

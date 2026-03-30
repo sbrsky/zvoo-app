@@ -29,11 +29,8 @@ describe('Game.jsx feature completeness', () => {
     expect(gameContent).toContain('Сначала послушайте реверс')
   })
 
-  it('has updateProfileStats function', () => {
-    expect(gameContent).toContain('updateProfileStats')
-    expect(gameContent).toContain('games_played')
-    expect(gameContent).toContain('games_won')
-    expect(gameContent).toContain('avg_score')
+  it('has applyProfileUpdate call', () => {
+    expect(gameContent).toContain('applyProfileUpdate')
   })
 
   it('has rematch button for host', () => {
@@ -41,8 +38,8 @@ describe('Game.jsx feature completeness', () => {
     expect(gameContent).toContain('Реванш')
   })
 
-  it('has fallback polling for guest SCORING→RESULTS', () => {
-    expect(gameContent).toContain('Fallback: if guest is stuck on SCORING')
-    expect(gameContent).toContain('pollInterval')
+  it('handles scoring through ScoreDisplay or Edge Function', () => {
+    expect(gameContent).toContain('ScoreDisplay')
+    expect(gameContent).toContain('SCORING')
   })
 })

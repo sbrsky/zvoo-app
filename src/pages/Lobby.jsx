@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { usePresence } from '../hooks/usePresence'
@@ -17,6 +17,7 @@ export default function Lobby() {
   const [rooms, setRooms] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [fetchError, setFetchError] = useState(null)
   const [copied, setCopied] = useState(null)
   // Set of room IDs where it's the current user's turn to act (round in progress, no score yet)
   const [myTurnRooms, setMyTurnRooms] = useState(new Set())
@@ -46,34 +47,59 @@ export default function Lobby() {
     }
   }, [profile, navigate])
 
-  useEffect(() => {
-    fetchRooms()
-    // Use a unique channel name to avoid conflicts across tabs
-    const channelName = `lobby_rooms_${Math.random().toString(36).slice(2)}`
-    const channel = supabase
-      .channel(channelName)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rooms' }, () => fetchRooms())
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms' }, () => fetchRooms())
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'rooms' }, () => fetchRooms())
-      .subscribe()
-    return () => supabase.removeChannel(channel)
-  }, [])
+  // ── Dev-only detailed logging (localhost only) ──
+  const IS_DEV = typeof window !== 'undefined' && window.location.hostname === 'localhost'
+  const devLog = IS_DEV ? console.log.bind(console, '[Lobby]') : () => {}
+  const devWarn = IS_DEV ? console.warn.bind(console, '[Lobby]') : () => {}
+  const devError = IS_DEV ? console.error.bind(console, '[Lobby]') : () => {}
 
-  async function fetchRooms(manual = false) {
-    if (manual) setRefreshing(true)
-    const { data } = await supabase
+  // ── stable refs so closures never go stale ──
+  const userRef = useRef(user)
+  const fetchRoomsRef = useRef(null)
+  useEffect(() => { userRef.current = user }, [user])
+
+  // Unique channel name per mount avoids Supabase client returning a stale/broken channel
+  const channelNameRef = useRef(`lobby_rooms_${Date.now()}`)
+
+  const fetchRooms = useCallback(async (manual = false) => {
+    const currentUser = userRef.current
+    devLog(`fetchRooms called — manual=${manual}, user=${currentUser?.id ?? 'null'}`)
+
+    if (manual) {
+      setRefreshing(true)
+      devLog('Manual refresh: refreshing Supabase auth session...')
+      try {
+        const { data, error } = await supabase.auth.refreshSession()
+        devLog('Auth session refreshed:', data?.session?.expires_at, error ?? 'ok')
+      } catch (e) {
+        devWarn('Auth refresh threw:', e)
+      }
+    }
+
+    devLog('Fetching rooms from DB...')
+    const startTs = Date.now()
+    const { data, error } = await supabase
       .from('rooms')
       .select('*, host:profiles!rooms_host_id_fkey(*), guest:profiles!rooms_guest_id_fkey(*)')
       .in('status', ['waiting', 'playing'])
       .order('created_at', { ascending: false })
-    setRooms(data || [])
+    devLog(`DB response in ${Date.now() - startTs}ms — rooms=${data?.length ?? 'err'}, error=${error?.message ?? 'none'}`)
+
+    if (error) {
+      devError('fetchRooms error:', error)
+      setFetchError(error.message)
+    } else {
+      setFetchError(null)
+      setRooms(data || [])
+      devLog('setRooms called with', data?.length, 'rooms')
+    }
     setLoading(false)
     if (manual) setTimeout(() => setRefreshing(false), 400)
 
-    // Determine turn state for playing rooms I'm in
-    if (user?.id && data?.length) {
+    // Determine turn state for playing rooms current user is in
+    if (currentUser?.id && data?.length) {
       const myPlayingRooms = data.filter(
-        r => r.status === 'playing' && (r.host_id === user.id || r.guest_id === user.id)
+        r => r.status === 'playing' && (r.host_id === currentUser.id || r.guest_id === currentUser.id)
       )
       if (myPlayingRooms.length) {
         const { data: sessions } = await supabase
@@ -81,26 +107,75 @@ export default function Lobby() {
           .select('room_id, recorder_id, ai_score, round_number')
           .in('room_id', myPlayingRooms.map(r => r.id))
           .order('created_at', { ascending: false })
-        // Build map: latest session per room
         const map = {}
         ;(sessions || []).forEach(s => {
-          if (!map[s.room_id]) map[s.room_id] = s // first = latest (desc order)
+          if (!map[s.room_id]) map[s.room_id] = s
         })
         setSessionMap(map)
         const turnSet = new Set()
         Object.values(map).forEach(s => {
-          // Only flag as "my turn" if round is actively in progress (no score yet)
-          if (s.recorder_id && s.ai_score == null) {
-            turnSet.add(s.room_id)
-          }
+          if (s.recorder_id && s.ai_score == null) turnSet.add(s.room_id)
         })
         setMyTurnRooms(turnSet)
+        devLog('myTurnRooms updated:', [...turnSet])
       } else {
         setMyTurnRooms(new Set())
         setSessionMap({})
       }
     }
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // empty deps — reads user via userRef to avoid stale-closure / useEffect re-runs
+
+  // Keep ref in sync
+  useEffect(() => { fetchRoomsRef.current = fetchRooms }, [fetchRooms])
+
+  useEffect(() => {
+    devLog('Channel useEffect mounting, channelName=', channelNameRef.current)
+    fetchRooms()
+
+    const channel = supabase
+      .channel(channelNameRef.current)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rooms' }, (payload) => {
+        devLog('Realtime INSERT:', payload.new?.id)
+        fetchRoomsRef.current?.()
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms' }, (payload) => {
+        devLog('Realtime UPDATE:', payload.new?.id, payload.new?.status)
+        fetchRoomsRef.current?.()
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'rooms' }, (payload) => {
+        devLog('Realtime DELETE:', payload.old?.id)
+        fetchRoomsRef.current?.()
+      })
+      .subscribe((status) => {
+        devLog('Channel status:', status)
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          devWarn('Realtime channel error, relying on polling:', status)
+        }
+      })
+
+    // Safety-net: poll every 10s in case Realtime misses an event
+    const poll = setInterval(() => {
+      devLog('Poll tick — refetching')
+      fetchRoomsRef.current?.()
+    }, 10_000)
+
+    // Refetch whenever user returns to this tab
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        devLog('Tab became visible — refetching')
+        fetchRoomsRef.current?.()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+
+    return () => {
+      devLog('Channel useEffect unmounting')
+      supabase.removeChannel(channel)
+      clearInterval(poll)
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
+  }, []) // runs exactly once — channel is stable for the lifetime of this Lobby mount
 
   const createRoom = useCallback(async (totalRounds = 3) => {
     setPendingRounds(totalRounds)
@@ -259,6 +334,25 @@ export default function Lobby() {
                   height: '76px',
                 }} />
               ))}
+            </div>
+          ) : fetchError ? (
+            <div style={{
+              padding: '48px 32px', borderRadius: '24px',
+              background: 'rgba(239,68,68,0.05)',
+              border: '1px dashed rgba(239,68,68,0.2)',
+              textAlign: 'center',
+            }}>
+              <div style={{ fontSize: '40px', marginBottom: '12px' }}>⚠️</div>
+              <p style={{ fontSize: '15px', color: 'rgba(239,68,68,0.8)', margin: '0 0 8px', fontWeight: 600 }}>Не удалось загрузить комнаты</p>
+              <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.25)', margin: '0 0 16px' }}>{fetchError}</p>
+              <button
+                onClick={() => fetchRooms(true)}
+                style={{
+                  padding: '8px 20px', borderRadius: '10px', border: 'none',
+                  background: 'rgba(239,68,68,0.15)', color: '#F87171',
+                  fontWeight: 700, fontSize: '13px', cursor: 'pointer',
+                }}
+              >🔄 Повторить</button>
             </div>
           ) : rooms.length === 0 ? (
             <div style={{

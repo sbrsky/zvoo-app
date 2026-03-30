@@ -82,18 +82,6 @@ export default defineConfig({
             options: {
               cacheName: 'google-fonts-webfonts',
               expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-          // Supabase Auth & REST API — network first (always want fresh data, but cache for Оффлайн)
-          {
-            urlPattern: /^https:\/\/.*\.supabase\.co\/rest\/.*/i,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'supabase-api-cache',
-              expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 }, // 1 hour
-              networkTimeoutSeconds: 5,
-              cacheableResponse: { statuses: [0, 200] },
             },
           },
           // Supabase Storage (audio files) — cache first (immutable by key)
@@ -106,11 +94,7 @@ export default defineConfig({
               cacheableResponse: { statuses: [0, 200] },
             },
           },
-          // Supabase Auth — network only (never cache auth)
-          {
-            urlPattern: /^https:\/\/.*\.supabase\.co\/auth\/.*/i,
-            handler: 'NetworkOnly',
-          },
+          // (Auth and REST are excluded entirely so the browser handles their connections directly).
         ],
       },
     }),

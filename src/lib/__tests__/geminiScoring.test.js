@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
-  scoreWithGemini, isGeminiAvailable, checkGeminiHealth,
+  scoreWithGemini, isGeminiAvailable
 } from '../geminiScoring'
 import { supabase } from '../supabase'
 
@@ -63,11 +63,4 @@ describe('scoreWithGemini', () => {
   })
 })
 
-// ── checkGeminiHealth ──────────────────────────────────────
-describe('checkGeminiHealth', () => {
-  it('returns availability status', async () => {
-    const health = await checkGeminiHealth()
-    expect(health).toHaveProperty('available')
-    expect(health).toHaveProperty('models')
-  })
-})
+// ── checkGeminiHealth removed as it's no longer used client-side

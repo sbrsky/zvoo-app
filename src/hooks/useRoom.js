@@ -9,8 +9,14 @@ export function useRoom(roomId, userId) {
   const [gameState, setGameState] = useState(null)
   const [error, setError] = useState(null)
   const channelRef = useRef(null)
+  const channelStatusRef = useRef('CLOSED') // track live channel status
   const joiningRef = useRef(false)
   const sessionCreatedRef = useRef(false)
+  const roomIdRef = useRef(roomId)
+  const userIdRef = useRef(userId)
+
+  useEffect(() => { roomIdRef.current = roomId }, [roomId])
+  useEffect(() => { userIdRef.current = userId }, [userId])
 
   useEffect(() => {
     if (!roomId || !userId) return
@@ -24,7 +30,21 @@ export function useRoom(roomId, userId) {
     }
     subscribeToRoom()
 
+    // Re-subscribe when the user returns to this tab (prevents stale channel after idle)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        const status = channelStatusRef.current
+        if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+          console.log('[useRoom] Tab became visible, reconnecting channel...')
+          if (channelRef.current) supabase.removeChannel(channelRef.current)
+          subscribeToRoom()
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibility)
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current)
         channelRef.current = null
@@ -54,7 +74,7 @@ export function useRoom(roomId, userId) {
   }
 
   function subscribeToRoom() {
-    const channel = supabase.channel(`room:${roomId}`, {
+    const channel = supabase.channel(`room:${roomIdRef.current}`, {
       config: { broadcast: { self: true } }
     })
 
@@ -62,26 +82,26 @@ export function useRoom(roomId, userId) {
       // ✅ Real-time DB changes: host detects guest joining, guest detects room updates
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` },
+        { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomIdRef.current}` },
         ({ new: updatedRoom }) => {
           setRoom(updatedRoom)
           // Load game session if we are now a confirmed participant
-          if (updatedRoom.host_id === userId || updatedRoom.guest_id === userId) {
-            fetchGameSession(roomId)
+          if (updatedRoom.host_id === userIdRef.current || updatedRoom.guest_id === userIdRef.current) {
+            fetchGameSession(roomIdRef.current)
           }
         }
       )
       // ✅ Both players sync game_sessions in real-time (mimic_audio_url, scores, etc.)
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'game_sessions', filter: `room_id=eq.${roomId}` },
+        { event: 'INSERT', schema: 'public', table: 'game_sessions', filter: `room_id=eq.${roomIdRef.current}` },
         ({ new: newSession }) => {
           setGameSession(newSession)
         }
       )
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'game_sessions', filter: `room_id=eq.${roomId}` },
+        { event: 'UPDATE', schema: 'public', table: 'game_sessions', filter: `room_id=eq.${roomIdRef.current}` },
         ({ new: updatedSession }) => {
           setGameSession(updatedSession)
         }
@@ -90,7 +110,12 @@ export function useRoom(roomId, userId) {
       .on('broadcast', { event: 'game_state' }, ({ payload }) => {
         setGameState(payload)
       })
-      .subscribe()
+      .subscribe((status) => {
+        channelStatusRef.current = status
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[useRoom] Channel error, will reconnect on next send or tab focus:', status)
+        }
+      })
 
     channelRef.current = channel
   }
@@ -102,15 +127,37 @@ export function useRoom(roomId, userId) {
     return () => window.removeEventListener('online', handleOnline)
   }, [])
 
-  const broadcastState = useCallback((event, data = {}) => {
-    if (channelRef.current) {
-      channelRef.current.send({
-        type: 'broadcast',
-        event: 'game_state',
-        payload: { event, ...data, senderId: userId, timestamp: Date.now() }
-      })
+  // Ensure channel is live; reconnect if needed
+  const ensureChannel = useCallback(() => {
+    const status = channelStatusRef.current
+    if (status !== 'SUBSCRIBED') {
+      console.log('[useRoom] Channel not ready (status=%s), reconnecting...', status)
+      if (channelRef.current) supabase.removeChannel(channelRef.current)
+      subscribeToRoom()
+      return false // not ready yet — caller should retry
     }
-  }, [userId])
+    return true
+  }, [])
+
+  const broadcastState = useCallback((event, data = {}) => {
+    const payload = { event, ...data, senderId: userIdRef.current, timestamp: Date.now() }
+
+    // If channel isn't subscribed, try to restore it then retry once with delay
+    if (!ensureChannel()) {
+      setTimeout(() => {
+        if (channelRef.current) {
+          channelRef.current.send({ type: 'broadcast', event: 'game_state', payload })
+        }
+      }, 800)
+      return
+    }
+
+    if (channelRef.current) {
+      channelRef.current.send({ type: 'broadcast', event: 'game_state', payload })
+    }
+  }, [userId, ensureChannel])
+
+
 
   const joinRoom = useCallback(async () => {
     // Prevent concurrent join attempts (useEffect can fire multiple times)
@@ -186,17 +233,27 @@ export function useRoom(roomId, userId) {
     return data
   }, [roomId])
 
-  const updateSession = useCallback(async (updates) => {
+  const updateSession = useCallback(async (updates, { retry } = {}) => {
     if (!gameSession) return
-    const { data, error } = await supabase
-      .from('game_sessions')
-      .update(updates)
-      .eq('id', gameSession.id)
-      .select()
-      .single()
-    if (error) throw error
-    setGameSession(data)
-    return data
+    try {
+      const { data, error } = await supabase
+        .from('game_sessions')
+        .update(updates)
+        .eq('id', gameSession.id)
+        .select()
+        .single()
+      if (error) throw error
+      setGameSession(data)
+      return data
+    } catch (err) {
+      // On first failure, refresh auth and retry once
+      if (!retry) {
+        console.warn('[updateSession] Request failed, refreshing session and retrying...', err.message)
+        try { await supabase.auth.refreshSession() } catch { /* ignore */ }
+        return updateSession(updates, { retry: true })
+      }
+      throw err
+    }
   }, [gameSession])
 
   const updateRoomStatus = useCallback(async (status) => {

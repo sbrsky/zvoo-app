@@ -8,27 +8,22 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 /**
- * In-memory mutex lock to replace navigator.locks.
- * navigator.locks causes "Lock was released because another request stole it"
- * when many concurrent Supabase requests fire on page mount
- * (Realtime channels + REST queries + auth state checks).
- *
- * This serializes access to the auth token properly without
- * the browser-level lock timeout issues.
+ * Safe in-memory lock for Supabase Auth.
+ * Prevents "Lock was released because another request stole it" errors.
+ * Supports proper queuing and robust timeout handling without deadlocks.
  */
 const locks = new Map()
 
-async function inMemoryLock(name, acquireTimeout, fn) {
+async function safeLock(name, acquireTimeout, fn) {
   const start = Date.now()
+  const timeoutMs = acquireTimeout || 10000
 
   while (locks.has(name)) {
-    if (Date.now() - start > acquireTimeout) {
-      // Timed out waiting — still execute to avoid deadlock
-      console.warn(`[supabase-lock] acquire timeout for "${name}", executing anyway`)
+    if (Date.now() - start > timeoutMs) {
+      console.warn(`[supabase-lock] Timeout acquiring lock "${name}", breaking queue`)
       break
     }
-    // Wait a tick and retry
-    await new Promise(resolve => setTimeout(resolve, 30))
+    await new Promise(r => setTimeout(r, 20))
   }
 
   locks.set(name, true)
@@ -39,10 +34,37 @@ async function inMemoryLock(name, acquireTimeout, fn) {
   }
 }
 
+const fetchWithTimeout = async (url, options) => {
+  const timeoutMs = 15000;
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      ...options,
+      // If Supabase passes a signal, we use it. Otherwise, use our timeout signal.
+      signal: options?.signal || controller.signal,
+    });
+    return res;
+  } catch (err) {
+    // Treat AbortError as a forced timeout error to unblock the UI
+    if (err.name === 'AbortError') {
+      console.warn(`⏳ Network timeout to Supabase (${url}) - forcing failure to unblock app.`);
+      throw new Error(`[Network] Supabase Request Timeout (${timeoutMs}ms) for ${url}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    lock: inMemoryLock,
+    lock: safeLock,
     persistSession: true,
     detectSessionInUrl: true,
   },
+  global: {
+    fetch: fetchWithTimeout,
+  }
 })
