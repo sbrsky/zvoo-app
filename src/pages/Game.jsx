@@ -1841,7 +1841,28 @@ export default function Game() {
                 </div>
                 <div style={{ fontSize: '14px', color: 'rgba(255,255,255,0.3)', marginBottom: '12px' }}>/ 100</div>
                 {comment && <p style={{ fontSize: '14px', color: 'rgba(255,255,255,0.6)', margin: '0 0 16px' }}>{comment}</p>}
-                {/* Recorder can listen to the mimic reversed audio for fun */}
+                {/* Both players can listen to the guesser's attempt audio */}
+                {gameSession?.mimic_audio_url && (
+                  <button
+                    onClick={async () => {
+                      const { data } = await supabase.storage.from('audio').download(gameSession.mimic_audio_url)
+                      if (data) audio.playAudio(data, 1.0)
+                    }}
+                    disabled={audio.isPlaying}
+                    style={{
+                      marginTop: '12px', padding: '10px 20px', borderRadius: '12px',
+                      border: '1px solid rgba(167,139,250,0.3)',
+                      background: 'rgba(167,139,250,0.08)',
+                      color: '#A78BFA', fontSize: '13px', fontWeight: 600,
+                      cursor: 'pointer', transition: 'all 0.2s', width: '100%',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(167,139,250,0.18)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(167,139,250,0.08)'}
+                  >
+                    🎧 Послушать попытку угадывающего
+                  </button>
+                )}
+                {/* Recorder can also hear the mimic reversed for fun */}
                 {isRecorder && gameSession?.mimic_reversed_url && (
                   <button
                     onClick={async () => {
@@ -1850,7 +1871,7 @@ export default function Game() {
                     }}
                     disabled={audio.isPlaying}
                     style={{
-                      marginTop: '12px', padding: '10px 20px', borderRadius: '12px',
+                      marginTop: '8px', padding: '10px 20px', borderRadius: '12px',
                       border: '1px solid rgba(6,182,212,0.3)',
                       background: 'rgba(6,182,212,0.08)',
                       color: '#06B6D4', fontSize: '13px', fontWeight: 600,
@@ -1859,7 +1880,7 @@ export default function Game() {
                     onMouseEnter={e => e.currentTarget.style.background = 'rgba(6,182,212,0.18)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'rgba(6,182,212,0.08)'}
                   >
-                    🎧 Послушать реверс соперника
+                    🔄 Послушать реверс соперника
                   </button>
                 )}
                 {isHost ? (
@@ -1945,6 +1966,27 @@ export default function Game() {
                   </div>
                 )}
 
+                {/* Both players: listen to guesser's attempt */}
+                {gameSession?.mimic_audio_url && (
+                  <button
+                    onClick={async () => {
+                      const { data } = await supabase.storage.from('audio').download(gameSession.mimic_audio_url)
+                      if (data) audio.playAudio(data, 1.0)
+                    }}
+                    disabled={audio.isPlaying}
+                    style={{
+                      padding: '12px 24px', borderRadius: '14px',
+                      border: '1px solid rgba(167,139,250,0.3)',
+                      background: 'rgba(167,139,250,0.08)',
+                      color: '#A78BFA', fontSize: '14px', fontWeight: 600,
+                      cursor: 'pointer', transition: 'all 0.2s', width: '100%',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(167,139,250,0.18)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(167,139,250,0.08)'}
+                  >
+                    🎧 Послушать попытку угадывающего
+                  </button>
+                )}
                 {/* Recorder: listen to mimic reversed for fun */}
                 {isRecorder && gameSession?.mimic_reversed_url && (
                   <button
@@ -1963,7 +2005,7 @@ export default function Game() {
                     onMouseEnter={e => e.currentTarget.style.background = 'rgba(6,182,212,0.18)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'rgba(6,182,212,0.08)'}
                   >
-                    🎧 Послушать реверс соперника
+                    🔄 Послушать реверс соперника
                   </button>
                 )}
                 {/* Rematch buttons */}
