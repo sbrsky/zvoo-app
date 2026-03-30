@@ -29,7 +29,7 @@ export default function ScoreDisplay({ score, comment, breakdown, actualTranscri
         <div style={{
           width: '80px', height: '80px', borderRadius: '50%',
           border: '3px solid rgba(124,58,237,0.2)',
-          borderTopColor: '#7C3AED',
+          borderTopColor: '#147A8A',
           animation: 'spin 1s linear infinite',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
@@ -85,8 +85,8 @@ export default function ScoreDisplay({ score, comment, breakdown, actualTranscri
         <svg viewBox="0 0 100 100" style={{ width: '100%', height: '100%', transform: 'rotate(-90deg)' }}>
           <defs>
             <linearGradient id="scoreGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor={score >= 66 ? '#06B6D4' : '#7C3AED'} />
-              <stop offset="100%" stopColor={score >= 66 ? '#10B981' : '#06B6D4'} />
+              <stop offset="0%" stopColor={score >= 66 ? '#2DC4B2' : '#147A8A'} />
+              <stop offset="100%" stopColor={score >= 66 ? '#10B981' : '#2DC4B2'} />
             </linearGradient>
             <filter id="glow">
               <feGaussianBlur stdDeviation="2" result="blur" />
@@ -110,7 +110,7 @@ export default function ScoreDisplay({ score, comment, breakdown, actualTranscri
         }}>
           <span style={{
             fontSize: '42px', fontWeight: 900, lineHeight: 1,
-            background: 'linear-gradient(135deg, #A78BFA, #67E8F9)',
+            background: 'linear-gradient(135deg, #4DD9C8, #7EEEE4)',
             WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
           }}>{animatedScore}</span>
           <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)', fontWeight: 600, marginTop: '2px' }}>/ 100</span>
@@ -127,7 +127,7 @@ export default function ScoreDisplay({ score, comment, breakdown, actualTranscri
         <span style={{ fontSize: '16px' }}>✨</span>
         <span style={{
           fontSize: '14px', fontWeight: 800,
-          background: 'linear-gradient(135deg, #A78BFA, #67E8F9)',
+          background: 'linear-gradient(135deg, #4DD9C8, #7EEEE4)',
           WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
         }}>+{xpEarned} XP</span>
       </div>
@@ -173,9 +173,9 @@ export default function ScoreDisplay({ score, comment, breakdown, actualTranscri
                   height: '100%', borderRadius: '4px',
                   width: `${value || 0}%`,
                   background: value >= 70
-                    ? 'linear-gradient(90deg, #06B6D4, #10B981)'
+                    ? 'linear-gradient(90deg, #2DC4B2, #10B981)'
                     : value >= 40
-                      ? 'linear-gradient(90deg, #7C3AED, #06B6D4)'
+                      ? 'linear-gradient(90deg, #147A8A, #2DC4B2)'
                       : 'linear-gradient(90deg, #EF4444, #F59E0B)',
                   transition: 'width 1s ease-out',
                 }} />

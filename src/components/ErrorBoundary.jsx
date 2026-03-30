@@ -37,19 +37,35 @@ export default class ErrorBoundary extends Component {
           }}>
             Произошла непредвиденная ошибка. Попробуйте перезагрузить страницу.
           </p>
-          <button
-            onClick={() => window.location.reload()}
-            style={{
-              padding: '14px 32px', borderRadius: '14px', border: 'none',
-              background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
-              color: '#fff', fontSize: '16px', fontWeight: 600,
-              cursor: 'pointer', transition: 'transform 0.2s',
-            }}
-            onMouseOver={e => e.target.style.transform = 'scale(1.05)'}
-            onMouseOut={e => e.target.style.transform = 'scale(1)'}
-          >
-            🔄 Перезагрузить
-          </button>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            <button
+              onClick={() => window.location.reload()}
+              style={{
+                padding: '14px 28px', borderRadius: '14px', border: 'none',
+                background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
+                color: '#fff', fontSize: '15px', fontWeight: 600,
+                cursor: 'pointer', transition: 'transform 0.2s',
+              }}
+              onMouseOver={e => e.target.style.transform = 'scale(1.05)'}
+              onMouseOut={e => e.target.style.transform = 'scale(1)'}
+            >
+              🔄 Перезагрузить
+            </button>
+            <button
+              onClick={() => { window.location.href = '/' }}
+              style={{
+                padding: '14px 28px', borderRadius: '14px',
+                border: '1px solid rgba(255,255,255,0.15)',
+                background: 'rgba(255,255,255,0.05)',
+                color: '#fff', fontSize: '15px', fontWeight: 600,
+                cursor: 'pointer', transition: 'transform 0.2s',
+              }}
+              onMouseOver={e => e.target.style.transform = 'scale(1.05)'}
+              onMouseOut={e => e.target.style.transform = 'scale(1)'}
+            >
+              🏠 На главную
+            </button>
+          </div>
           {this.state.error && (
             <details style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', maxWidth: '600px' }}>
               <summary style={{ cursor: 'pointer' }}>Детали ошибки</summary>

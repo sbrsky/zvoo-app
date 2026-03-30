@@ -80,7 +80,7 @@ export default function Login() {
             <div style={{
               width: '64px', height: '64px', margin: '0 auto 16px',
               borderRadius: '18px',
-              background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+              background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontSize: '28px',
               boxShadow: '0 10px 30px rgba(124,58,237,0.35)',
@@ -89,7 +89,7 @@ export default function Login() {
               {isSignUp ? 'Создать аккаунт' : 'Добро пожаловать'}
             </h1>
             <p style={{ fontSize: '14px', color: 'rgba(255,255,255,0.45)', margin: 0 }}>
-              {isSignUp ? 'Присоединяйся к EchoFlip AI' : 'Войди, чтобы начать играть'}
+              {isSignUp ? 'Присоединяйся к ZVOO' : 'Войди, чтобы начать играть'}
             </p>
           </div>
 
@@ -172,7 +172,7 @@ export default function Login() {
               style={{
                 width: '100%', padding: '14px',
                 borderRadius: '14px', border: 'none',
-                background: loading ? 'rgba(124,58,237,0.4)' : 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+                background: loading ? 'rgba(124,58,237,0.4)' : 'linear-gradient(135deg, #147A8A, #2DC4B2)',
                 color: 'white', fontSize: '15px', fontWeight: 700,
                 cursor: loading ? 'not-allowed' : 'pointer',
                 transition: 'all 0.2s',
@@ -191,7 +191,7 @@ export default function Login() {
               onClick={() => { setIsSignUp(!isSignUp); setError('') }}
               style={{
                 background: 'none', border: 'none', cursor: 'pointer',
-                color: '#A78BFA', fontWeight: 600, fontSize: '14px', padding: 0,
+                color: '#4DD9C8', fontWeight: 600, fontSize: '14px', padding: 0,
               }}
             >
               {isSignUp ? 'Войти' : 'Регистрация'}

@@ -1,0 +1,25 @@
+import { useState, useEffect } from 'react'
+
+/**
+ * Tracks browser online/offline status.
+ * Returns { isOnline } — false when navigator.onLine is false OR
+ * when the browser fires the 'offline' event.
+ */
+export function useNetworkStatus() {
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine)
+
+  useEffect(() => {
+    const goOnline  = () => setIsOnline(true)
+    const goOffline = () => setIsOnline(false)
+
+    window.addEventListener('online',  goOnline)
+    window.addEventListener('offline', goOffline)
+
+    return () => {
+      window.removeEventListener('online',  goOnline)
+      window.removeEventListener('offline', goOffline)
+    }
+  }, [])
+
+  return { isOnline }
+}

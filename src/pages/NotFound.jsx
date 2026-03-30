@@ -51,7 +51,7 @@ export default function NotFound() {
             display: 'inline-block',
             padding: '14px 32px',
             borderRadius: '16px',
-            background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+            background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
             color: 'white', fontWeight: 700, fontSize: '15px',
             textDecoration: 'none',
             boxShadow: '0 10px 32px rgba(124,58,237,0.4)',

@@ -12,6 +12,7 @@ const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models
 // Stable models that support generateContent via REST API
 const DEFAULT_MODEL = 'gemini-3.1-flash-lite-preview'
 const FALLBACK_MODEL = 'gemini-2.0-flash'
+const IMAGE_MODEL   = 'gemini-3.1-flash-image-preview'
 
 // Models that DON'T support standard generateContent (Live API only)
 const LIVE_API_ONLY_MODELS = [
@@ -198,13 +199,90 @@ serve(async (req) => {
       only_transcribe = false,
       actualTranscriptionText = '',
       language = 'ru',
+      action = '',           // 'generate_choices' | 'generate_vision' | ''
+      transcription = '',   // for superpower actions
     } = await req.json()
 
     const models = await getGeminiModels()
-    console.log(`Using models: primary=${models.primary}, fallback=${models.fallback}, language=${language}`)
+    console.log(`Using models: primary=${models.primary}, fallback=${models.fallback}, language=${language}, action=${action || 'score'}`)
 
     // Resolve the transcription hint for this game's language
     const langHint = LANGUAGE_HINTS[language] ?? LANGUAGE_HINTS['ru']
+
+    // ─── Superpower: generate 4 choices ──────────────────────────────────────
+    if (action === 'generate_choices') {
+      if (!transcription) throw new Error('transcription required for generate_choices')
+      const langLabel = language === 'ru' ? 'Russian' : 'English'
+      const prompt = `The original phrase is: "${transcription}".
+Generate exactly 4 options for a multiple-choice quiz, in ${langLabel}:
+- 1 option must be the EXACT original phrase (copy it verbatim)
+- 3 options must be plausible-sounding but INCORRECT alternatives (similar phonetically or thematically)
+IMPORTANT: all 4 options MUST be different from each other — no duplicates allowed.
+Respond ONLY with a JSON array of exactly 4 unique strings, randomly shuffled. Example: ["phrase A", "phrase B", "phrase C", "phrase D"]
+No markdown, no explanation, just the JSON array.`
+      const choiceReq = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 1.0, maxOutputTokens: 300 } }
+      let choiceData
+      try { choiceData = await callGemini(models.primary, choiceReq) }
+      catch { choiceData = await callGemini(models.fallback, choiceReq) }
+      const raw = choiceData?.candidates?.[0]?.content?.parts?.[0]?.text || '[]'
+      const match = raw.match(/\[[\s\S]*?\]/)
+      let choices: string[] = []
+      try { choices = JSON.parse(match ? match[0] : '[]') } catch { choices = [] }
+
+      // Dedup: remove any duplicates, keep unique values
+      choices = [...new Set(choices.map((c: string) => String(c).trim()).filter(Boolean))]
+
+      // Ensure the correct answer is in the list
+      if (!choices.includes(transcription)) choices.unshift(transcription)
+
+      // If we still don't have 4 unique choices, pad with distinct fallbacks
+      const fallbacks = [
+        `(вариант А) ${transcription.split(' ').reverse().join(' ')}`,
+        `(вариант Б) ${transcription.slice(0, Math.ceil(transcription.length / 2))}...`,
+        `(вариант В) ...${transcription.slice(Math.floor(transcription.length / 2))}`,
+      ]
+      for (const fb of fallbacks) {
+        if (choices.length >= 4) break
+        if (!choices.includes(fb)) choices.push(fb)
+      }
+      choices = choices.slice(0, 4)
+
+      // Final shuffle
+      choices = choices.sort(() => Math.random() - 0.5)
+      return new Response(JSON.stringify({ choices }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+
+
+    // ─── Superpower: generate vision image ───────────────────────────────────
+    if (action === 'generate_vision') {
+      if (!transcription) throw new Error('transcription required for generate_vision')
+      const imageUrl = `${GEMINI_BASE_URL}/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`
+      const prompt = `Create a simple, clear visual illustration that represents this phrase: "${transcription}". Draw it as a visual hint without any text or letters. Style: clean, colorful, simple graphic.`
+      const imageReq = {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseModalities: ['IMAGE', 'TEXT'], temperature: 0.7 }
+      }
+      let imgData: any
+      try {
+        const res = await fetch(imageUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(imageReq) })
+        imgData = await res.json()
+      } catch (e: any) {
+        throw new Error(`Image generation failed: ${e.message}`)
+      }
+      // Extract inline image from response
+      const parts = imgData?.candidates?.[0]?.content?.parts || []
+      const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'))
+      if (!imgPart) throw new Error('No image returned from Gemini')
+      return new Response(JSON.stringify({
+        imageBase64: imgPart.inlineData.data,
+        mimeType: imgPart.inlineData.mimeType,
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     if (only_transcribe) {
       if (!originalB64) throw new Error('Missing audio data for transcription')

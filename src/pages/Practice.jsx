@@ -26,10 +26,10 @@ const CHALLENGES = [
 
 const Btn = ({ children, onClick, variant = 'primary', disabled = false, pulse = false }) => {
   const colors = {
-    primary: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+    primary: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
     secondary: 'rgba(255,255,255,0.06)',
     danger: 'linear-gradient(135deg, #EF4444, #DC2626)',
-    cyan: 'linear-gradient(135deg, #06B6D4, #10B981)',
+    cyan: 'linear-gradient(135deg, #2DC4B2, #10B981)',
   }
   return (
     <button onClick={onClick} disabled={disabled} style={{
@@ -198,7 +198,7 @@ export default function Practice() {
 
         {/* Header */}
         <div style={{ textAlign: 'center' }}>
-          <h1 style={{ fontSize: '28px', fontWeight: 800, margin: 0, background: 'linear-gradient(135deg, #7C3AED, #06B6D4)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+          <h1 style={{ fontSize: '28px', fontWeight: 800, margin: 0, background: 'linear-gradient(135deg, #147A8A, #2DC4B2)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
             🎯 Тренировка
           </h1>
           <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '14px', marginTop: '8px' }}>
@@ -238,7 +238,7 @@ export default function Practice() {
               <div key={p} style={{
                 width: '36px', height: '4px', borderRadius: '2px', transition: 'background 0.4s',
                 background: ['RECORD','LISTEN','MIMIC','RESULTS'].indexOf(phase) >= ['RECORD','LISTEN','MIMIC','RESULTS'].indexOf(p)
-                  ? 'linear-gradient(90deg, #7C3AED, #06B6D4)' : 'rgba(255,255,255,0.08)',
+                  ? 'linear-gradient(90deg, #147A8A, #2DC4B2)' : 'rgba(255,255,255,0.08)',
               }} />
             ))}
           </div>
@@ -274,7 +274,7 @@ export default function Practice() {
           }}>
             <div key={countdown} style={{
               fontSize: '96px', fontWeight: 900, lineHeight: 1,
-              background: countdown === 1 ? 'linear-gradient(135deg, #EF4444, #F59E0B)' : countdown === 2 ? 'linear-gradient(135deg, #F59E0B, #06B6D4)' : 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+              background: countdown === 1 ? 'linear-gradient(135deg, #EF4444, #F59E0B)' : countdown === 2 ? 'linear-gradient(135deg, #F59E0B, #2DC4B2)' : 'linear-gradient(135deg, #147A8A, #2DC4B2)',
               WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
               animation: 'countdown-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
             }}>{countdown}</div>

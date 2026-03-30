@@ -186,7 +186,7 @@ export function useAudioEngine() {
     }
   }, [getAudioContext]) // no longer depends on audioBlob state
 
-  const playAudio = useCallback(async (blob) => {
+  const playAudio = useCallback(async (blob, playbackRate = 1.0) => {
     const ctx = getAudioContext()
     if (ctx.state === 'suspended') await ctx.resume()
 
@@ -203,6 +203,7 @@ export function useAudioEngine() {
 
     const source = ctx.createBufferSource()
     source.buffer = audioBuffer
+    source.playbackRate.value = playbackRate
     source.connect(analyser)
     analyser.connect(ctx.destination)
     sourceRef.current = source
@@ -223,6 +224,11 @@ export function useAudioEngine() {
     source.start(0)
   }, [getAudioContext])
 
+  /** Adjust playback rate of the currently playing source (Slow Mo toggle) */
+  const setPlaybackRate = useCallback((rate) => {
+    if (sourceRef.current) sourceRef.current.playbackRate.value = rate
+  }, [])
+
   const stopPlaying = useCallback(() => {
     if (sourceRef.current) {
       try { sourceRef.current.stop() } catch (e) {}
@@ -237,7 +243,7 @@ export function useAudioEngine() {
   return {
     isRecording, audioBlob, reversedBlob, isPlaying, duration, analyserData,
     recordingElapsed, MAX_RECORDING_SECONDS,
-    startRecording, stopRecording, reverseAudio, playAudio, stopPlaying,
+    startRecording, stopRecording, reverseAudio, playAudio, stopPlaying, setPlaybackRate,
     setAudioBlob, setReversedBlob,
     // expose ref for tests / immediate access
     audioBlobRef,

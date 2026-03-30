@@ -7,18 +7,28 @@ import { useAsyncButton } from '../hooks/useAsyncButton'
 import { useToast } from '../components/Toast'
 import { BtnSpinner } from '../components/BtnSpinner'
 import { LANGUAGES, DEFAULT_LANGUAGE_ID } from '../lib/languages'
+import { SUPERPOWERS } from '../lib/superpowers'
+import { UserProfileDrawer } from '../components/UserProfileDrawer'
 
 export default function Lobby() {
   const { user, profile } = useAuth()
   const { onlineUsers } = usePresence('lobby', { id: user?.id, username: profile?.username, avatar_url: profile?.avatar_url })
   const [rooms, setRooms] = useState([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [copied, setCopied] = useState(null)
+  // Set of room IDs where it's the current user's turn to act (round in progress, no score yet)
+  const [myTurnRooms, setMyTurnRooms] = useState(new Set())
+  // Map of roomId → latest session data (for status labels)
+  const [sessionMap, setSessionMap] = useState({})
   const [showRoundPicker, setShowRoundPicker] = useState(false)
   const [pendingRounds, setPendingRounds] = useState(null)
   const [selectedLang, setSelectedLang] = useState(DEFAULT_LANGUAGE_ID)
+  // Superpower caps: { slow: 1, choices: 1, vision: 1 }
+  const [spConfig, setSpConfig] = useState({ slow: 1, choices: 1, vision: 1 })
   const navigate = useNavigate()
   const toast = useToast()
+  const [drawerUserId, setDrawerUserId] = useState(null)
 
   // Sync selectedLang with profile's preferred_language once it loads
   useEffect(() => {
@@ -33,14 +43,19 @@ export default function Lobby() {
 
   useEffect(() => {
     fetchRooms()
+    // Use a unique channel name to avoid conflicts across tabs
+    const channelName = `lobby_rooms_${Math.random().toString(36).slice(2)}`
     const channel = supabase
-      .channel('rooms_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms' }, () => fetchRooms())
+      .channel(channelName)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rooms' }, () => fetchRooms())
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms' }, () => fetchRooms())
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'rooms' }, () => fetchRooms())
       .subscribe()
     return () => supabase.removeChannel(channel)
   }, [])
 
-  async function fetchRooms() {
+  async function fetchRooms(manual = false) {
+    if (manual) setRefreshing(true)
     const { data } = await supabase
       .from('rooms')
       .select('*, host:profiles!rooms_host_id_fkey(*), guest:profiles!rooms_guest_id_fkey(*)')
@@ -48,6 +63,38 @@ export default function Lobby() {
       .order('created_at', { ascending: false })
     setRooms(data || [])
     setLoading(false)
+    if (manual) setTimeout(() => setRefreshing(false), 400)
+
+    // Determine turn state for playing rooms I'm in
+    if (user?.id && data?.length) {
+      const myPlayingRooms = data.filter(
+        r => r.status === 'playing' && (r.host_id === user.id || r.guest_id === user.id)
+      )
+      if (myPlayingRooms.length) {
+        const { data: sessions } = await supabase
+          .from('game_sessions')
+          .select('room_id, recorder_id, ai_score, round_number')
+          .in('room_id', myPlayingRooms.map(r => r.id))
+          .order('created_at', { ascending: false })
+        // Build map: latest session per room
+        const map = {}
+        ;(sessions || []).forEach(s => {
+          if (!map[s.room_id]) map[s.room_id] = s // first = latest (desc order)
+        })
+        setSessionMap(map)
+        const turnSet = new Set()
+        Object.values(map).forEach(s => {
+          // Only flag as "my turn" if round is actively in progress (no score yet)
+          if (s.recorder_id && s.ai_score == null) {
+            turnSet.add(s.room_id)
+          }
+        })
+        setMyTurnRooms(turnSet)
+      } else {
+        setMyTurnRooms(new Set())
+        setSessionMap({})
+      }
+    }
   }
 
   const createRoom = useCallback(async (totalRounds = 3) => {
@@ -55,7 +102,14 @@ export default function Lobby() {
     try {
       const { data, error } = await supabase
         .from('rooms')
-        .insert({ host_id: user.id, total_rounds: totalRounds, game_language: selectedLang })
+        .insert({
+          host_id: user.id,
+          total_rounds: totalRounds,
+          game_language: selectedLang,
+          sp_slow_max:    spConfig.slow,
+          sp_choices_max: spConfig.choices,
+          sp_vision_max:  spConfig.vision,
+        })
         .select()
         .single()
       if (error) throw error
@@ -69,7 +123,7 @@ export default function Lobby() {
       setPendingRounds(null)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, navigate, selectedLang])
+  }, [user?.id, navigate, selectedLang, spConfig])
 
   // useAsyncButton for the "+ Создать комнату" header button (opens picker)
   const openPickerBtn = useAsyncButton(() => {
@@ -85,6 +139,7 @@ export default function Lobby() {
 
   return (
     <>
+    <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     <div style={{ minHeight: '100vh', padding: '96px 20px 60px', maxWidth: '1140px', margin: '0 auto' }}>
 
       {/* Ambient */}
@@ -130,7 +185,7 @@ export default function Lobby() {
           style={{
             padding: '14px 28px',
             borderRadius: '16px', border: 'none',
-            background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+            background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
             color: 'white', fontWeight: 700, fontSize: '15px',
             boxShadow: '0 8px 30px rgba(124,58,237,0.4)',
             whiteSpace: 'nowrap',
@@ -144,7 +199,7 @@ export default function Lobby() {
           style={{
             padding: '14px 28px', borderRadius: '16px',
             border: '1px solid rgba(124,58,237,0.3)', background: 'rgba(124,58,237,0.08)',
-            color: '#A78BFA', fontWeight: 700, fontSize: '15px',
+            color: '#4DD9C8', fontWeight: 700, fontSize: '15px',
             whiteSpace: 'nowrap',
           }}
         >
@@ -158,9 +213,31 @@ export default function Lobby() {
 
         {/* Rooms list */}
         <div>
-          <p style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.12em', color: 'rgba(255,255,255,0.35)', marginBottom: '16px', textTransform: 'uppercase' }}>
-            Доступные комнаты
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+            <p style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.12em', color: 'rgba(255,255,255,0.35)', margin: 0, textTransform: 'uppercase' }}>
+              Доступные комнаты
+            </p>
+            <button
+              onClick={() => fetchRooms(true)}
+              disabled={refreshing}
+              title="Обновить список комнат"
+              style={{
+                background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: '10px', padding: '6px 10px', cursor: 'pointer',
+                color: 'rgba(255,255,255,0.5)', fontSize: '15px', lineHeight: 1,
+                transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px',
+              }}
+              onMouseOver={e => { if (!refreshing) e.currentTarget.style.background = 'rgba(255,255,255,0.1)' }}
+              onMouseOut={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+            >
+              <span style={{
+                display: 'inline-block',
+                animation: refreshing ? 'spin 0.6s linear infinite' : 'none',
+                fontSize: '14px',
+              }}>🔄</span>
+              <span style={{ fontSize: '11px', fontWeight: 600 }}>Обновить</span>
+            </button>
+          </div>
 
           {loading ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -190,33 +267,43 @@ export default function Lobby() {
               {rooms.map(room => {
                 const isMyRoom = room.host_id === user.id || room.guest_id === user.id
                 const canJoin = room.status === 'waiting' && room.host_id !== user.id && !room.guest_id
+                const isMyTurn = isMyRoom && myTurnRooms.has(room.id)
                 return (
                   <div
                     key={room.id}
                     style={{
                       padding: '20px 24px',
                       borderRadius: '20px',
-                      background: isMyRoom ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.04)',
-                      border: `1px solid ${isMyRoom ? 'rgba(124,58,237,0.25)' : 'rgba(255,255,255,0.08)'}`,
+                      background: isMyTurn
+                        ? 'rgba(124,58,237,0.13)'
+                        : isMyRoom
+                          ? 'rgba(124,58,237,0.08)'
+                          : 'rgba(255,255,255,0.04)',
+                      border: isMyTurn
+                        ? '2px solid #4DD9C8'
+                        : `1px solid ${isMyRoom ? 'rgba(124,58,237,0.25)' : 'rgba(255,255,255,0.08)'}`,
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px',
                       cursor: isMyRoom || canJoin ? 'pointer' : 'default',
-                      transition: 'all 0.2s',
+                      transition: 'background 0.2s',
+                      animation: isMyTurn ? 'pulse-border 1.8s ease-in-out infinite' : 'none',
+                      boxShadow: isMyTurn ? '0 0 0 0 rgba(167,139,250,0.5)' : 'none',
+                      position: 'relative',
                     }}
                     onClick={() => {
                       if (canJoin || isMyRoom) navigate(`/game/${room.id}`)
                     }}
                     onMouseEnter={e => {
-                      if (canJoin || isMyRoom) e.currentTarget.style.background = isMyRoom ? 'rgba(124,58,237,0.13)' : 'rgba(255,255,255,0.07)'
+                      if (canJoin || isMyRoom) e.currentTarget.style.background = isMyTurn ? 'rgba(124,58,237,0.18)' : isMyRoom ? 'rgba(124,58,237,0.13)' : 'rgba(255,255,255,0.07)'
                     }}
                     onMouseLeave={e => {
-                      e.currentTarget.style.background = isMyRoom ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.04)'
+                      e.currentTarget.style.background = isMyTurn ? 'rgba(124,58,237,0.13)' : isMyRoom ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.04)'
                     }}
                   >
                     {/* Host avatar + info */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                       <div style={{
                         width: '44px', height: '44px', borderRadius: '14px', flexShrink: 0,
-                        background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+                        background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         color: 'white', fontWeight: 800, fontSize: '16px',
                       }}>
@@ -224,26 +311,80 @@ export default function Lobby() {
                       </div>
                       <div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ fontWeight: 700, color: 'white', fontSize: '15px' }}>
+                          <button
+                            onClick={e => { e.stopPropagation(); room.host_id && setDrawerUserId(room.host_id) }}
+                            style={{
+                              background: 'none', border: 'none', padding: 0,
+                              fontWeight: 700, color: 'white', fontSize: '15px',
+                              cursor: 'pointer',
+                            }}
+                          >
                             {room.host?.username || 'Unknown'}
-                          </span>
-                          {isMyRoom && (
-                            <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '100px', background: 'rgba(124,58,237,0.2)', color: '#A78BFA', fontWeight: 600 }}>
+                          </button>
+                          {isMyTurn && (
+                            <span style={{
+                              fontSize: '11px', padding: '2px 10px', borderRadius: '100px',
+                              background: 'rgba(167,139,250,0.25)', color: '#C4B5FD', fontWeight: 700,
+                              animation: 'pulse-glow 1s ease-in-out infinite',
+                              border: '1px solid rgba(167,139,250,0.4)',
+                            }}>
+                              ⚡ ВАШ ХОД!
+                            </span>
+                          )}
+                          {!isMyTurn && isMyRoom && (
+                            <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '100px', background: 'rgba(124,58,237,0.2)', color: '#4DD9C8', fontWeight: 600 }}>
                               Моя
                             </span>
                           )}
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
-                          <span style={{
-                            fontSize: '12px', padding: '2px 10px', borderRadius: '100px', fontWeight: 600,
-                            background: room.status === 'waiting' ? 'rgba(245,158,11,0.15)' : 'rgba(16,185,129,0.15)',
-                            color: room.status === 'waiting' ? '#F59E0B' : '#10B981',
-                          }}>
-                            {room.status === 'waiting' ? '⏳ Ожидание' : '🎮 В игре'}
-                          </span>
+                          {(() => {
+                            const sess = sessionMap[room.id]
+                            if (room.status === 'waiting') {
+                              return (
+                                <span style={{ fontSize: '12px', padding: '2px 10px', borderRadius: '100px', fontWeight: 600, background: 'rgba(245,158,11,0.15)', color: '#F59E0B' }}>
+                                  ⏳ Ожидание игрока
+                                </span>
+                              )
+                            }
+                            if (isMyRoom && sess) {
+                              const roundNum = sess.round_number ?? room.current_round ?? 1
+                              const totalRounds = room.total_rounds ?? 3
+                              if (sess.ai_score != null) {
+                                // Round complete — host needs to start next
+                                const nextRound = roundNum < totalRounds ? roundNum + 1 : null
+                                return (
+                                  <span style={{ fontSize: '12px', padding: '2px 10px', borderRadius: '100px', fontWeight: 600, background: 'rgba(245,158,11,0.12)', color: '#F59E0B' }}>
+                                    {nextRound ? `⏸ Ожидание раунда ${nextRound}` : '🏆 Финальный результат'}
+                                  </span>
+                                )
+                              }
+                              return (
+                                <span style={{ fontSize: '12px', padding: '2px 10px', borderRadius: '100px', fontWeight: 600, background: 'rgba(16,185,129,0.15)', color: '#10B981' }}>
+                                  🎮 Раунд {roundNum} / {totalRounds}
+                                </span>
+                              )
+                            }
+                            return (
+                              <span style={{ fontSize: '12px', padding: '2px 10px', borderRadius: '100px', fontWeight: 600, background: 'rgba(16,185,129,0.15)', color: '#10B981' }}>
+                                🎮 В игре
+                              </span>
+                            )
+                          })()}
                           {room.guest && (
                             <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)' }}>
-                              vs {room.guest.username}
+                              vs{' '}
+                              <button
+                                onClick={e => { e.stopPropagation(); room.guest_id && setDrawerUserId(room.guest_id) }}
+                                style={{
+                                  background: 'none', border: 'none', padding: 0,
+                                  color: '#4DD9C8', fontSize: '12px', fontWeight: 600,
+                                  cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted',
+                                  textUnderlineOffset: '2px',
+                                }}
+                              >
+                                {room.guest.username}
+                              </button>
                             </span>
                           )}
                         </div>
@@ -273,7 +414,7 @@ export default function Lobby() {
                           className="btn-game"
                           style={{
                             padding: '8px 18px', borderRadius: '12px', border: 'none',
-                            background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+                            background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
                             color: 'white', fontWeight: 700, fontSize: '13px',
                             boxShadow: '0 4px 16px rgba(124,58,237,0.35)',
                           }}
@@ -386,7 +527,7 @@ export default function Lobby() {
                     display: 'flex', alignItems: 'center', gap: '8px',
                     transition: 'all 0.18s',
                     background: selectedLang === lang.id
-                      ? 'linear-gradient(135deg, #7C3AED, #06B6D4)'
+                      ? 'linear-gradient(135deg, #147A8A, #2DC4B2)'
                       : 'rgba(255,255,255,0.07)',
                     color: selectedLang === lang.id ? 'white' : 'rgba(255,255,255,0.55)',
                     boxShadow: selectedLang === lang.id ? '0 4px 16px rgba(124,58,237,0.35)' : 'none',
@@ -400,11 +541,43 @@ export default function Lobby() {
             </div>
           </div>
 
+          {/* Superpower config */}
+          <div style={{ marginBottom: '24px', textAlign: 'left' }}>
+            <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.35)', margin: '0 0 12px' }}>
+              ⚡ Супер Силы (зарядов на игру)
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {SUPERPOWERS.map(sp => (
+                <div key={sp.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '14px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                  <span style={{ fontSize: '20px', flexShrink: 0 }}>{sp.icon}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: 'white' }}>{sp.name}</div>
+                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sp.shortDesc}</div>
+                  </div>
+                  {/* Counter buttons */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                    <button
+                      onClick={() => setSpConfig(p => ({ ...p, [sp.id]: Math.max(0, p[sp.id] - 1) }))}
+                      style={{ width: '28px', height: '28px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,0.08)', color: 'white', fontSize: '16px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+                    >−</button>
+                    <span style={{ width: '24px', textAlign: 'center', fontSize: '16px', fontWeight: 800,
+                      color: spConfig[sp.id] === 0 ? 'rgba(255,255,255,0.2)' : sp.color
+                    }}>{spConfig[sp.id]}</span>
+                    <button
+                      onClick={() => setSpConfig(p => ({ ...p, [sp.id]: Math.min(3, p[sp.id] + 1) }))}
+                      style={{ width: '28px', height: '28px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,0.08)', color: 'white', fontSize: '16px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+                    >+</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <p style={{ margin: '0 0 14px', fontSize: '13px', color: 'rgba(255,255,255,0.4)' }}>
             Выбери количество раундов
           </p>
           <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginBottom: '24px' }}>
-            {[3, 5, 7].map(n => {
+            {[2, 4, 6].map(n => {
               const isPending = pendingRounds === n
               const isOtherPending = pendingRounds !== null && pendingRounds !== n
               return (
@@ -416,7 +589,7 @@ export default function Lobby() {
                   style={{
                     width: '90px', padding: '20px 0', borderRadius: '18px', border: 'none',
                     background: isPending
-                      ? 'linear-gradient(135deg, #7C3AED, #06B6D4)'
+                      ? 'linear-gradient(135deg, #147A8A, #2DC4B2)'
                       : 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(6,182,212,0.2))',
                     boxShadow: isPending ? '0 8px 30px rgba(124,58,237,0.4)' : 'none',
                     opacity: isOtherPending ? 0.4 : 1,
@@ -427,7 +600,7 @@ export default function Lobby() {
                   {isPending ? (
                     <><BtnSpinner size={22} /><span style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.7)' }}>Создаём...</span></>
                   ) : (
-                    <><span style={{ fontSize: '28px', fontWeight: 900, color: '#fff' }}>{n}</span><span style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.5)' }}>раунд{n === 3 ? 'а' : 'ов'}</span></>
+                    <><span style={{ fontSize: '28px', fontWeight: 900, color: '#fff' }}>{n}</span><span style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.5)' }}>раунд{n === 2 ? 'а' : 'ов'}</span></>
                   )}
                 </button>
               )
@@ -446,6 +619,12 @@ export default function Lobby() {
           </button>
         </div>
       </div>
+    )}
+    {drawerUserId && (
+      <UserProfileDrawer
+        userId={drawerUserId}
+        onClose={() => setDrawerUserId(null)}
+      />
     )}
   </>
   )

@@ -54,7 +54,7 @@ describe('OfflineQueue', () => {
 
   it('flush dispatches replay events', async () => {
     const replayHandler = vi.fn()
-    window.addEventListener('echoflip:replay', replayHandler)
+    window.addEventListener('zvoo:replay', replayHandler)
 
     offlineQueue.enqueue({ type: 'joinRoom', data: { roomId: '123' } })
     await offlineQueue.flush()
@@ -62,6 +62,6 @@ describe('OfflineQueue', () => {
     expect(replayHandler).toHaveBeenCalledTimes(1)
     expect(offlineQueue.size).toBe(0)
 
-    window.removeEventListener('echoflip:replay', replayHandler)
+    window.removeEventListener('zvoo:replay', replayHandler)
   })
 })

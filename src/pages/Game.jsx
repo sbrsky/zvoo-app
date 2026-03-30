@@ -14,6 +14,7 @@ import { useToast } from '../components/Toast'
 import { playNotification } from '../lib/sounds'
 import { launchConfetti } from '../lib/confetti'
 import { hapticLight, hapticHeavy, hapticSuccess, hapticError } from '../lib/haptic'
+import { SUPERPOWERS, SUPERPOWER_MAP, supportsPlaybackRate } from '../lib/superpowers'
 
 // AI Thinking quips — rotated every 2.5s during scoring
 const AI_QUIPS = [
@@ -68,7 +69,7 @@ function PhaseBar({ phase }) {
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: active ? '16px' : '14px',
                 background: done
-                  ? 'linear-gradient(135deg, #7C3AED, #06B6D4)'
+                  ? 'linear-gradient(135deg, #147A8A, #2DC4B2)'
                   : active
                     ? 'rgba(124,58,237,0.25)'
                     : 'rgba(255,255,255,0.05)',
@@ -94,7 +95,7 @@ function PhaseBar({ phase }) {
               <div style={{
                 height: '2px', width: '100%', maxWidth: '40px',
                 background: done
-                  ? 'linear-gradient(90deg, #7C3AED, #06B6D4)'
+                  ? 'linear-gradient(90deg, #147A8A, #2DC4B2)'
                   : 'rgba(255,255,255,0.08)',
                 borderRadius: '2px', transition: 'all 0.4s',
                 marginBottom: '20px',
@@ -124,7 +125,7 @@ function ActionButton({ onClick, disabled, children, variant = 'primary', pulse 
   const styles = {
     primary: {
       ...base,
-      background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+      background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
       color: 'white',
       boxShadow: disabled ? 'none' : '0 10px 32px rgba(124,58,237,0.4)',
     },
@@ -150,7 +151,7 @@ function ActionButton({ onClick, disabled, children, variant = 'primary', pulse 
     },
     cyan: {
       ...base,
-      background: 'linear-gradient(135deg, #06B6D4, #7C3AED)',
+      background: 'linear-gradient(135deg, #2DC4B2, #147A8A)',
       color: 'white',
       boxShadow: disabled ? 'none' : '0 10px 32px rgba(6,182,212,0.35)',
     },
@@ -217,7 +218,7 @@ function FakeProgressBar({ active, duration = 6000, label = 'Загрузка...
       <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.7)', marginBottom: '8px', fontWeight: 600 }}>{label}</div>
       <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden' }}>
         <div style={{
-          width: `${progress}%`, height: '100%', background: '#A78BFA',
+          width: `${progress}%`, height: '100%', background: '#4DD9C8',
           transition: 'width 0.1s linear',
           boxShadow: '0 0 10px rgba(167,139,250,0.5)',
         }} />
@@ -246,8 +247,9 @@ export default function Game() {
   const [comment, setComment]           = useState('')
   const [breakdown, setBreakdown]       = useState(null)
   const [copied, setCopied]             = useState(false)
-  const [hasListened, setHasListened]   = useState(false)
-  const [countdown, setCountdown]       = useState(null)
+  const [hasListened, setHasListened]         = useState(false)
+  const [reversedAudioReady, setReversedAudioReady] = useState(false)
+  const [countdown, setCountdown]             = useState(null)
   const [guestGuessText, setGuestGuessText] = useState('')
   const [actualTranscription, setActualTranscription] = useState(null)
   const [attemptTranscription, setAttemptTranscription] = useState(null)
@@ -270,6 +272,22 @@ export default function Game() {
   const [roundScores, setRoundScores]   = useState([]) // [{round, score, comment, recorder}]
   const [rematchRequested, setRematchRequested] = useState(false) // did I click rematch?
   const [rematchPending, setRematchPending]     = useState(false) // did the other player click?
+  const [finalized, setFinalized]               = useState(false) // prevent double finalize
+  const [finalStats, setFinalStats]             = useState(null)  // { hostScore, guestScore, winnerId, ratingChange }
+
+  // ─── Superpower state ─────────────────────────────────────────────────────
+  // usedPowers: how many times each power was used THIS game (guest's tracker)
+  const [usedPowers, setUsedPowers] = useState({ slow: 0, choices: 0, vision: 0 })
+  // maxPowers: limits set by host (from room row)
+  const [maxPowers, setMaxPowers]   = useState({ slow: 1, choices: 1, vision: 1 })
+  // activation state
+  const [slowMoActive, setSlowMoActive]         = useState(false)
+  const [choicesOptions, setChoicesOptions]     = useState(null)   // string[] | null
+  const [choicesLoading, setChoicesLoading]     = useState(false)
+  const [visionImage, setVisionImage]           = useState(null)   // base64 data URL | null
+  const [visionLoading, setVisionLoading]       = useState(false)
+  const [slowMoSupported]                       = useState(() => supportsPlaybackRate())
+  // ─────────────────────────────────────────────────────────────────────────
 
   // AI quip cycling during scoring phase
   const [aiQuipIdx, setAiQuipIdx] = useState(0)
@@ -327,11 +345,28 @@ export default function Game() {
     }
   }, [room, isHost, isGuest, joinRoom])
 
-  // Sync totalRounds from room
+  // Sync totalRounds + superpower limits from room
   useEffect(() => {
     if (room?.total_rounds) setTotalRounds(room.total_rounds)
     if (room?.current_round) setCurrentRound(room.current_round)
-  }, [room?.total_rounds, room?.current_round])
+    if (room) {
+      setMaxPowers({
+        slow:    room.sp_slow_max    ?? 1,
+        choices: room.sp_choices_max ?? 1,
+        vision:  room.sp_vision_max  ?? 1,
+      })
+    }
+  }, [room?.total_rounds, room?.current_round, room?.sp_slow_max, room?.sp_choices_max, room?.sp_vision_max])
+
+  // Restore SP usage from DB (survives page refresh)
+  useEffect(() => {
+    if (!gameSession || !isGuesser) return
+    setUsedPowers({
+      slow:    gameSession.sp_slow_used    ?? 0,
+      choices: gameSession.sp_choices_used ?? 0,
+      vision:  gameSession.sp_vision_used  ?? 0,
+    })
+  }, [gameSession?.id, isGuesser])
 
   // Detect guest joined → move host to READY phase
   useEffect(() => {
@@ -353,7 +388,7 @@ export default function Game() {
   useEffect(() => {
     if (!room || (phase !== PHASES.WAITING && phase !== PHASES.READY)) return
     if (room.status === 'finished') {
-      // Game already finished — load final results
+      // Game already finished — load final results (works for both host and guest on reload)
       const loadResults = async () => {
         const { data: sessions } = await supabase
           .from('game_sessions').select('ai_score, ai_comment, ai_actual_transcription, guest_guess_text, manual_score, round_number, recorder_id')
@@ -371,8 +406,28 @@ export default function Game() {
           if (last.manual_score) setManualScore(last.manual_score)
           setPhase(PHASES.FINAL_RESULTS)
         }
+
+        // Load finalStats from finished_games so both players see the scoreboard
+        const { data: fg } = await supabase
+          .from('finished_games').select('*').eq('room_id', roomId).maybeSingle()
+        if (fg) {
+          const stats = {
+            hostScore: fg.host_score,
+            guestScore: fg.guest_score,
+            winnerId: fg.winner_id,
+            ratingChange: Math.abs(fg.host_rating_change || fg.guest_rating_change || 0),
+            hostRoundsWon: fg.host_rounds_won,
+            guestRoundsWon: fg.guest_rounds_won,
+            roundDetails: fg.round_details || [],
+          }
+          setFinalStats(stats)
+          // Winner confetti on reload
+          const iWon = fg.winner_id === user?.id || fg.winner_id === null
+          if (iWon) setTimeout(() => launchConfetti(), 600)
+        }
       }
       loadResults()
+
     } else if (room.status === 'playing' && (isHost || isGuest)) {
       const recoverPhase = async () => {
         const { data: session } = await supabase
@@ -469,7 +524,8 @@ export default function Game() {
         const isLastRound = (gameState.roundNumber || currentRound) >= totalRounds
         setPhase(isLastRound ? PHASES.FINAL_RESULTS : PHASES.ROUND_RESULTS)
         playNotification('gameOver')
-        if (gameState.score >= 60) setTimeout(() => launchConfetti(), 300)
+        // Only confetti for non-final rounds (final confetti handled by FINAL_STATS)
+        if (!isLastRound && gameState.score >= 60) setTimeout(() => launchConfetti(), 300)
         break
       }
       case GAME_EVENTS.MANUAL_SCORE_SET:
@@ -483,8 +539,12 @@ export default function Game() {
         setScore(null); setComment(''); setBreakdown(null)
         setActualTranscription(null); setAttemptTranscription(null)
         setGuestGuessText(''); setManualScore(null)
-        setHasListened(false); setUploadTimedOut(false)
+        setHasListened(false); setReversedAudioReady(false); setUploadTimedOut(false)
         audio.setAudioBlob?.(null); audio.setReversedBlob?.(null)
+        // Reset per-round superpower UI
+        setSlowMoActive(false)
+        setChoicesOptions(null)
+        setVisionImage(null)
         setPhase(PHASES.HOST_RECORD)
         playNotification('turnStart')
         break
@@ -499,6 +559,22 @@ export default function Game() {
           navigate(`/game/${gameState.newRoomId}`)
         }
         break
+      case 'FINAL_STATS': {
+        // Guest receives final scoreboard from host
+        if (gameState.finalStats) {
+          setFinalStats(gameState.finalStats)
+          // Trigger confetti for the winner
+          const { winnerId: wId } = gameState.finalStats
+          const iWon = wId === user?.id || wId === null  // null = tie -> both get confetti
+          if (iWon) setTimeout(() => launchConfetti(), 400)
+        }
+        // Guest updates their OWN profile using their auth token (bypasses RLS correctly)
+        if (gameState.guestProfileUpdate && !isHost) {
+          const { myScore, won, winnerId: wId, ratingChange: rc } = gameState.guestProfileUpdate
+          applyProfileUpdate(myScore, won, wId, rc)
+        }
+        break
+      }
       case 'GAME_CANCELLED':
         // Host cancelled — redirect everyone to lobby
         navigate('/lobby')
@@ -571,7 +647,10 @@ export default function Game() {
       setScore(null); setComment(''); setBreakdown(null)
       setActualTranscription(null); setAttemptTranscription(null)
       setGuestGuessText(''); setManualScore(null)
-      setHasListened(false); setUploadTimedOut(false)
+      setSlowMoActive(false)
+      setChoicesOptions(null)
+      setVisionImage(null)
+      setHasListened(false); setReversedAudioReady(false); setUploadTimedOut(false)
       audio.setAudioBlob?.(null); audio.setReversedBlob?.(null)
       broadcastState(GAME_EVENTS.NEXT_ROUND, { nextRound })
       hapticHeavy()
@@ -609,6 +688,99 @@ export default function Game() {
       onComplete()
     }, 3000)
   }, [])
+
+  // ─── Play reversed audio (used by button + SlowMo) ─────────────────────────
+  const handlePlayReversed = useCallback(async (playbackRate = 1.0) => {
+    const { data: session } = await supabase
+      .from('game_sessions').select('reversed_audio_url').eq('room_id', roomId)
+      .order('created_at', { ascending: false }).limit(1).maybeSingle()
+    const url = session?.reversed_audio_url || gameSession?.reversed_audio_url
+    if (url) {
+      const { data: fileData } = await supabase.storage.from('audio').download(url)
+      if (fileData) {
+        audio.playAudio(fileData, playbackRate)
+        setHasListened(true)
+      }
+    }
+  }, [roomId, gameSession?.reversed_audio_url, audio])
+
+  // ─── Superpower handlers ──────────────────────────────────────────────────
+  const { VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY } = import.meta.env
+
+  const activateSlowMo = useCallback(async () => {
+    if (!slowMoSupported) {
+      toast.error('⚠️ Ваше устройство не поддерживает Slow Mo. Обновите браузер или устройство.')
+      return
+    }
+    if (usedPowers.slow >= maxPowers.slow) { toast.error('Зарядов Slow Mo не осталось'); return }
+    const newCount = usedPowers.slow + 1
+    setSlowMoActive(true)
+    setUsedPowers(p => ({ ...p, slow: newCount }))
+    updateSession({ sp_slow_used: newCount }).catch(() => {})
+    hapticLight()
+    toast.success('🐢 Slow Mo — прослушивание замедлено!')
+    await handlePlayReversed(0.7)
+    setSlowMoActive(false)
+  }, [slowMoSupported, usedPowers.slow, maxPowers.slow, handlePlayReversed, updateSession, toast])
+
+  const activateChoices = useCallback(async () => {
+    if (usedPowers.choices >= maxPowers.choices) { toast.error('Зарядов AI Choices не осталось'); return }
+    if (choicesLoading || choicesOptions) return
+    if (!actualTranscription) { toast.error('Транскрипция ещё не готова, подожди...'); return }
+    const newCount = usedPowers.choices + 1
+    setChoicesLoading(true)
+    setUsedPowers(p => ({ ...p, choices: newCount }))
+    updateSession({ sp_choices_used: newCount }).catch(() => {})
+    try {
+      const fnUrl = `${VITE_SUPABASE_URL}/functions/v1/gemini-scoring`
+      const res = await fetch(fnUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': VITE_SUPABASE_ANON_KEY },
+        body: JSON.stringify({ action: 'generate_choices', transcription: actualTranscription, language: room?.game_language || 'ru' }),
+      })
+      const data = await res.json()
+      if (!data.choices?.length) throw new Error('No choices returned')
+      setChoicesOptions(data.choices)
+      hapticLight()
+      toast.success('🎯 AI предложил варианты!')
+    } catch (e) {
+      toast.error(`AI Choices: ${e.message}`)
+      setUsedPowers(p => ({ ...p, choices: Math.max(0, p.choices - 1) }))
+      updateSession({ sp_choices_used: Math.max(0, newCount - 1) }).catch(() => {})
+    } finally {
+      setChoicesLoading(false)
+    }
+  }, [usedPowers.choices, maxPowers.choices, choicesLoading, choicesOptions, actualTranscription, room?.game_language, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, updateSession, toast])
+
+  const activateVision = useCallback(async () => {
+    if (usedPowers.vision >= maxPowers.vision) { toast.error('Зарядов AI Vision не осталось'); return }
+    if (visionLoading || visionImage) return
+    if (!actualTranscription) { toast.error('Транскрипция ещё не готова, подожди...'); return }
+    const newCount = usedPowers.vision + 1
+    setVisionLoading(true)
+    setUsedPowers(p => ({ ...p, vision: newCount }))
+    updateSession({ sp_vision_used: newCount }).catch(() => {})
+    try {
+      const fnUrl = `${VITE_SUPABASE_URL}/functions/v1/gemini-scoring`
+      const res = await fetch(fnUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': VITE_SUPABASE_ANON_KEY },
+        body: JSON.stringify({ action: 'generate_vision', transcription: actualTranscription, language: room?.game_language || 'ru' }),
+      })
+      const data = await res.json()
+      if (!data.imageBase64) throw new Error('No image returned')
+      setVisionImage(`data:${data.mimeType};base64,${data.imageBase64}`)
+      hapticSuccess()
+      toast.success('🎨 AI Vision готов!')
+    } catch (e) {
+      toast.error(`AI Vision: ${e.message}`)
+      setUsedPowers(p => ({ ...p, vision: Math.max(0, p.vision - 1) }))
+      updateSession({ sp_vision_used: Math.max(0, newCount - 1) }).catch(() => {})
+    } finally {
+      setVisionLoading(false)
+    }
+  }, [usedPowers.vision, maxPowers.vision, visionLoading, visionImage, actualTranscription, room?.game_language, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, updateSession, toast])
+  // ─────────────────────────────────────────────────────────────────────────
 
   const activeHandlerRef = useRef(null)
   const wasRecordingRef = useRef(false)
@@ -730,19 +902,30 @@ export default function Game() {
     navigate('/lobby')
   }
 
-  const handlePlayReversed = async () => {
-    const { data: session } = await supabase
-      .from('game_sessions').select('*').eq('room_id', roomId)
-      .order('created_at', { ascending: false }).limit(1).maybeSingle()
-    const url = session?.reversed_audio_url || gameSession?.reversed_audio_url
-    if (url) {
-      const { data: fileData } = await supabase.storage.from('audio').download(url)
-      if (fileData) {
-        audio.playAudio(fileData)
-        setHasListened(true)
+  // Poll until reversed_audio_url is available in DB, then mark ready
+  useEffect(() => {
+    if (!isGuesser || phase !== PHASES.GUEST_LISTEN) return
+    setReversedAudioReady(false)
+    let cancelled = false
+    const poll = async () => {
+      for (let i = 0; i < 30; i++) {
+        if (cancelled) return
+        try {
+          const { data: session } = await supabase
+            .from('game_sessions').select('reversed_audio_url').eq('room_id', roomId)
+            .order('created_at', { ascending: false }).limit(1).maybeSingle()
+          if (session?.reversed_audio_url) {
+            if (!cancelled) setReversedAudioReady(true)
+            return
+          }
+        } catch { /* ignore */ }
+        await new Promise(r => setTimeout(r, 1500))
       }
     }
-  }
+    poll()
+    return () => { cancelled = true }
+  }, [phase, isGuesser, roomId])
+
 
   const doProcessMimic = async (mimicBlob) => {
     if (!mimicBlob || mimicBlob.size === 0) {
@@ -807,20 +990,38 @@ export default function Game() {
   const submitGuestGuess = async () => {
     if (!guestGuessText.trim()) return
     setPendingSubmit(true)
+
+    // Only race the DB write against a timeout — triggerScoring (AI) can be slow (20-40s)
+    const dbWriteTimeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('TIMEOUT')), 10_000)
+    )
+
     try {
-      await updateSession({ guest_guess_text: guestGuessText.trim() })
+      // 1. Write to DB with timeout
+      await Promise.race([
+        updateSession({ guest_guess_text: guestGuessText.trim() }),
+        dbWriteTimeout,
+      ])
+      // 2. Unlock button immediately — scoring runs in background
+      setPendingSubmit(false)
       broadcastState(GAME_EVENTS.GUESS_SUBMITTED)
       setPhase(PHASES.SCORING)
       hapticSuccess()
+      // 3. AI scoring — no timeout (Gemini takes 20-40s)
       await triggerScoring()
     } catch (err) {
+      if (err.message === 'TIMEOUT') {
+        toast.error('⚡ Сервер не отвечает. Проверь соединение и попробуй снова.')
+      } else {
+        toast.error('Ошибка при сохранении ответа. Попробуй ещё раз.')
+      }
       console.error('submitGuestGuess err:', err)
-      toast.error('Ошибка при сохранении ответа. Попробуй ещё раз.')
       hapticError()
-    } finally {
       setPendingSubmit(false)
     }
   }
+
+
 
   const triggerScoring = async () => {
     setScoring(true)
@@ -890,8 +1091,9 @@ export default function Game() {
       const isLastRound = currentRound >= totalRounds
       if (isLastRound) {
         await updateRoomStatus(ROOM_STATUS.FINISHED)
+        await finalizeGame(finalScore)
       }
-      await updateProfileStats(finalScore)
+       // Profile stats updated at game end only (finalizeGame called above)
     } catch (err) {
       console.error('Scoring failed:', err)
       const fb = 50
@@ -909,35 +1111,141 @@ export default function Game() {
     }
   }
 
-  const updateProfileStats = async (scoreValue) => {
+  // XP level thresholds (client copy — matches UserProfileDrawer)
+  const XP_LEVELS = [0, 100, 250, 500, 1000, 2000, 3500, 5000, 7500, 10000]
+  const calcLevel = (xp) => {
+    let lv = 1
+    XP_LEVELS.forEach((t, i) => { if (xp >= t) lv = i + 1 })
+    return Math.min(lv, XP_LEVELS.length)
+  }
+
+  /**
+   * Applies XP/rating/stats update to the CURRENT USER's profile.
+   * Must be called with the auth token of the user whose profile is being updated.
+   * @param {number} myScore - the player's cumulative score this game
+   * @param {boolean} won - whether this player won
+   * @param {string|null} winnerId - id of winner (null = tie)
+   * @param {number} ratingChange - magnitude of rating delta
+   */
+  const applyProfileUpdate = async (myScore, won, winnerId, ratingChange) => {
     try {
-      // Fetch current stats for both players
-      const playerIds = [room?.host_id, room?.guest_id].filter(Boolean)
-      for (const pid of playerIds) {
-        const { data: p } = await supabase.from('profiles').select('games_played, games_won, avg_score, best_score, win_streak').eq('id', pid).maybeSingle()
-        if (!p) continue
-        const gamesPlayed = (p.games_played || 0) + 1
-        // Determine winner: host wins if score < 50 (guest mimicked badly), guest wins if score >= 50
-        const isWinner = (pid === room.guest_id && scoreValue >= 50) || (pid === room.host_id && scoreValue < 50)
-        const gamesWon = (p.games_won || 0) + (isWinner ? 1 : 0)
-        const avgScore = pid === room.guest_id
-          ? Math.round(((p.avg_score || 0) * (gamesPlayed - 1) + scoreValue) / gamesPlayed)
-          : (p.avg_score || 0)
-        // Update best_score if this game's score is higher (only for the guest who actually scored)
-        const playerScore = pid === room.guest_id ? scoreValue : 0
-        const bestScore = Math.max(p.best_score || 0, playerScore)
-        // Update win_streak: increment if won, reset to 0 if lost
-        const winStreak = isWinner ? (p.win_streak || 0) + 1 : 0
-        await supabase.from('profiles').update({
-          games_played: gamesPlayed,
-          games_won: gamesWon,
-          avg_score: avgScore,
-          best_score: bestScore,
-          win_streak: winStreak,
-        }).eq('id', pid)
-      }
+      const { data: p, error: fetchErr } = await supabase
+        .from('profiles')
+        .select('games_played, games_won, xp, level, rating, avg_score, best_score, win_streak')
+        .eq('id', user.id).maybeSingle()
+      if (fetchErr) throw fetchErr
+      if (!p) return
+      const xpEarned = Math.round(myScore / 5)
+      const newXP = (p.xp || 0) + xpEarned
+      const newLevel = calcLevel(newXP)
+      const newRating = Math.max(0, (p.rating || 1000) + (won ? ratingChange : winnerId ? -ratingChange : 0))
+      const gamesPlayed = (p.games_played || 0) + 1
+      const gamesWon = (p.games_won || 0) + (won ? 1 : 0)
+      const avgScore = Math.round(((p.avg_score || 0) * (gamesPlayed - 1) + myScore) / gamesPlayed)
+      const bestScore = Math.max(p.best_score || 0, myScore)
+      const winStreak = won ? (p.win_streak || 0) + 1 : 0
+      const { error: updateErr } = await supabase.from('profiles').update({
+        xp: newXP, level: newLevel, rating: newRating,
+        games_played: gamesPlayed, games_won: gamesWon,
+        avg_score: avgScore, best_score: bestScore, win_streak: winStreak,
+      }).eq('id', user.id)
+      if (updateErr) console.warn('applyProfileUpdate error:', updateErr)
     } catch (err) {
-      console.warn('updateProfileStats error:', err)
+      console.warn('applyProfileUpdate failed:', err)
+    }
+  }
+
+  /**
+   * finalizeGame — called ONCE when the last round score is saved.
+   * - Computes per-player cumulative scores
+   * - Inserts finished_games row
+   * - Updates both profiles: xp, level, rating, games_played, games_won, avg_score, best_score, win_streak
+   * Rating formula: ratingChange = clamp(4, 20, round(|hostScore - guestScore| / 5))
+   */
+  const finalizeGame = async (allRoundScores) => {
+    if (finalized || !room?.host_id || !room?.guest_id) return
+    setFinalized(true)
+    try {
+      // Load all sessions for this room to get recorder_id per round
+      const { data: sessions } = await supabase
+        .from('game_sessions')
+        .select('round_number, recorder_id, ai_score')
+        .eq('room_id', roomId)
+        .order('round_number', { ascending: true })
+
+      // Compute scores: guesser earns the ai_score (recorder_id is who RECORDED, guesser is the other)
+      let hostScore = 0, guestScore = 0
+      let hostRoundsGuessed = 0, guestRoundsGuessed = 0
+      let hostRoundsWon = 0, guestRoundsWon = 0
+      const roundDetails = []
+
+      ;(sessions || []).forEach(s => {
+        if (s.ai_score == null) return
+        const guesserIsHost = s.recorder_id === room.guest_id  // host guessed
+        if (guesserIsHost) {
+          hostScore += s.ai_score
+          hostRoundsGuessed++
+          if (s.ai_score >= 60) hostRoundsWon++
+        } else {
+          guestScore += s.ai_score
+          guestRoundsGuessed++
+          if (s.ai_score >= 60) guestRoundsWon++
+        }
+        roundDetails.push({ round: s.round_number, recorder_id: s.recorder_id, score: s.ai_score })
+      })
+
+      // Winner
+      const winnerId = hostScore > guestScore ? room.host_id
+        : guestScore > hostScore ? room.guest_id : null  // null = tie
+
+      // Rating change based on score difference
+      const scoreDiff = Math.abs(hostScore - guestScore)
+      const ratingChange = Math.max(4, Math.min(20, Math.round(scoreDiff / 5)))
+
+      // Insert finished_games (idempotent check via room_id)
+      const { error: fgError } = await supabase.from('finished_games').insert({
+        room_id: roomId,
+        host_id: room.host_id,
+        guest_id: room.guest_id,
+        host_score: hostScore,
+        guest_score: guestScore,
+        host_rounds_guessed: hostRoundsGuessed,
+        guest_rounds_guessed: guestRoundsGuessed,
+        host_rounds_won: hostRoundsWon,
+        guest_rounds_won: guestRoundsWon,
+        winner_id: winnerId,
+        round_details: roundDetails,
+        total_rounds: totalRounds,
+        host_rating_change: winnerId === room.host_id ? ratingChange : winnerId === room.guest_id ? -ratingChange : 0,
+        guest_rating_change: winnerId === room.guest_id ? ratingChange : winnerId === room.host_id ? -ratingChange : 0,
+      })
+      if (fgError) console.warn('finished_games insert error:', fgError)
+
+      // ⚠️ RLS: host can only update their OWN profile row.
+      // Guest profile is updated by the guest themselves via FINAL_STATS broadcast.
+      const hostWon = winnerId === room.host_id
+      await applyProfileUpdate(hostScore, hostWon, winnerId, ratingChange)
+
+      // Store for UI display (host)
+      const stats = { hostScore, guestScore, winnerId, ratingChange,
+        hostRoundsWon, guestRoundsWon, roundDetails }
+      setFinalStats(stats)
+
+      // Broadcast finalStats + guest's computed profile payload so guest can update themselves
+      broadcastState('FINAL_STATS', {
+        finalStats: stats,
+        guestProfileUpdate: {
+          myScore: guestScore,
+          won: winnerId === room.guest_id,
+          winnerId,
+          ratingChange,
+        },
+      })
+
+      // Confetti for host if they won or it's a tie
+      if (hostWon || winnerId === null) setTimeout(() => launchConfetti(), 400)
+    } catch (err) {
+      console.warn('finalizeGame error:', err)
     }
   }
 
@@ -1002,18 +1310,18 @@ export default function Game() {
   // Update browser tab title based on phase
   useEffect(() => {
     const titles = {
-      [PHASES.WAITING]:        '⏳ Ожидание — EchoFlip',
-      [PHASES.READY]:          '✅ Готовы — EchoFlip',
-      [PHASES.HOST_RECORD]:    isRecorder ? '🎙️ Твой ход! — EchoFlip' : '⏳ Ход записывающего — EchoFlip',
-      [PHASES.GUEST_LISTEN]:   isGuesser ? '🎧 Слушай! — EchoFlip' : '⏳ Ход угадывающего — EchoFlip',
-      [PHASES.GUEST_MIMIC]:    isGuesser ? '🗣️ Повторяй! — EchoFlip' : '⏳ Ход угадывающего — EchoFlip',
-      [PHASES.SCORING]:        '🤖 AI думает — EchoFlip',
-      [PHASES.ROUND_RESULTS]:  `🏆 Раунд ${currentRound}/${totalRounds} — EchoFlip`,
-      [PHASES.FINAL_RESULTS]:  '🏆 Финал — EchoFlip',
-      [PHASES.RESULTS]:        '🏆 Результат — EchoFlip',
+      [PHASES.WAITING]:        '⏳ Ожидание — ZVOO',
+      [PHASES.READY]:          '✅ Готовы — ZVOO',
+      [PHASES.HOST_RECORD]:    isRecorder ? '🎙️ Твой ход! — ZVOO' : '⏳ Ход записывающего — ZVOO',
+      [PHASES.GUEST_LISTEN]:   isGuesser ? '🎧 Слушай! — ZVOO' : '⏳ Ход угадывающего — ZVOO',
+      [PHASES.GUEST_MIMIC]:    isGuesser ? '🗣️ Повторяй! — ZVOO' : '⏳ Ход угадывающего — ZVOO',
+      [PHASES.SCORING]:        '🤖 AI думает — ZVOO',
+      [PHASES.ROUND_RESULTS]:  `🏆 Раунд ${currentRound}/${totalRounds} — ZVOO`,
+      [PHASES.FINAL_RESULTS]:  '🏆 Финал — ZVOO',
+      [PHASES.RESULTS]:        '🏆 Результат — ZVOO',
     }
-    document.title = titles[phase] || 'EchoFlip AI'
-    return () => { document.title = 'EchoFlip AI' }
+    document.title = titles[phase] || 'ZVOO'
+    return () => { document.title = 'ZVOO' }
   }, [phase, isHost, isGuest])
 
   // Loading state
@@ -1023,7 +1331,7 @@ export default function Game() {
         <div style={{ textAlign: 'center' }}>
           <div style={{
             width: '72px', height: '72px', borderRadius: '24px', margin: '0 auto 20px',
-            background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+            background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: '32px', animation: 'pulse-glow 1.5s ease-in-out infinite',
             boxShadow: '0 16px 48px rgba(124,58,237,0.4)',
@@ -1058,7 +1366,54 @@ export default function Game() {
 
   return (
     <div style={{ minHeight: '100vh', padding: '88px 20px 60px', maxWidth: '1100px', margin: '0 auto' }}>
-      {/* Phase-aware ambient bg — transitions with game state */}
+
+      {/* ─── AI Vision fullscreen loader overlay ─── */}
+      {visionLoading && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9990,
+          background: 'rgba(10,10,30,0.88)',
+          backdropFilter: 'blur(16px)',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          gap: '24px',
+        }}>
+          {/* Animated magic circle */}
+          <div style={{ position: 'relative', width: '100px', height: '100px' }}>
+            <div style={{
+              position: 'absolute', inset: 0,
+              borderRadius: '50%',
+              border: '3px solid transparent',
+              borderTopColor: '#4DD9C8',
+              borderRightColor: '#147A8A',
+              animation: 'spin 1s linear infinite',
+            }} />
+            <div style={{
+              position: 'absolute', inset: '14px',
+              borderRadius: '50%',
+              border: '2px solid transparent',
+              borderTopColor: '#2DC4B2',
+              animation: 'spin 1.4s linear infinite reverse',
+            }} />
+            <div style={{
+              position: 'absolute', inset: '32px',
+              borderRadius: '50%',
+              background: 'linear-gradient(135deg, rgba(124,58,237,0.3), rgba(6,182,212,0.2))',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: '22px',
+            }}>🎨</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <p style={{ fontSize: '18px', fontWeight: 700, color: '#4DD9C8', margin: '0 0 8px' }}>
+              AI Vision создаёт подсказку...
+            </p>
+            <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)', margin: 0 }}>
+              Gemini рисует визуальный хинт — секунду!
+            </p>
+          </div>
+        </div>
+      )}
+
+
       <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', overflow: 'hidden', zIndex: 0 }}>
         {/* Static base layer */}
         <div style={{
@@ -1132,7 +1487,7 @@ export default function Game() {
           }}>
             <div style={{
               width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
-              background: phase === PHASES.RESULTS ? '#10B981' : audio.isRecording ? '#EF4444' : audio.isPlaying ? '#06B6D4' : '#7C3AED',
+              background: phase === PHASES.RESULTS ? '#10B981' : audio.isRecording ? '#EF4444' : audio.isPlaying ? '#2DC4B2' : '#147A8A',
               boxShadow: `0 0 10px ${audio.isRecording ? 'rgba(239,68,68,0.6)' : 'rgba(124,58,237,0.5)'}`,
               animation: (audio.isRecording || audio.isPlaying || phase === PHASES.SCORING) ? 'pulse-glow 1.5s ease-in-out infinite' : 'none',
             }} />
@@ -1212,8 +1567,8 @@ export default function Game() {
               background: countdown === 1
                 ? 'linear-gradient(135deg, #EF4444, #F59E0B)'
                 : countdown === 2
-                ? 'linear-gradient(135deg, #F59E0B, #06B6D4)'
-                : 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+                ? 'linear-gradient(135deg, #F59E0B, #2DC4B2)'
+                : 'linear-gradient(135deg, #147A8A, #2DC4B2)',
               WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
               animation: 'countdown-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
             }}>{countdown}</div>
@@ -1245,7 +1600,7 @@ export default function Game() {
                     background: 'rgba(255,255,255,0.05)',
                     border: '1px solid rgba(255,255,255,0.1)',
                   }}>
-                    <code style={{ fontSize: '12px', color: '#67E8F9', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <code style={{ fontSize: '12px', color: '#7EEEE4', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {window.location.href}
                     </code>
                     <button
@@ -1355,7 +1710,7 @@ export default function Game() {
                 className={audio.recordingElapsed >= MAX_RECORDING_SECONDS - 5 ? 'timer-critical' : ''}
                 style={{
                   fontSize: '40px', fontWeight: 900, fontVariantNumeric: 'tabular-nums',
-                  color: audio.recordingElapsed >= MAX_RECORDING_SECONDS - 5 ? '#EF4444' : '#A78BFA',
+                  color: audio.recordingElapsed >= MAX_RECORDING_SECONDS - 5 ? '#EF4444' : '#4DD9C8',
                   transition: 'color 0.3s',
                 }}
               >
@@ -1433,18 +1788,62 @@ export default function Game() {
           {/* GUEST — listen + mimic controls */}
           {isGuesser && phase === PHASES.GUEST_LISTEN && (
             <div style={{ textAlign: 'center' }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'center', marginBottom: '8px' }}>
-                <ActionButton onClick={handlePlayReversed} disabled={audio.isPlaying} variant="cyan">
-                  🎧 Послушать реверс
-                </ActionButton>
-                <ActionButton onClick={handleMimicStart} disabled={!hasListened} variant="primary">
-                  🗣️ Начать повтор
-                </ActionButton>
-              </div>
-              {!hasListened && (
-                <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', margin: '4px 0 0' }}>
-                  ⚠️ Сначала послушайте реверс
-                </p>
+              {!reversedAudioReady ? (
+                /* ─── Waiting for other player's audio to upload ─── */
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
+                  <div style={{
+                    width: '48px', height: '48px', borderRadius: '50%',
+                    border: '3px solid rgba(124,58,237,0.2)',
+                    borderTop: '3px solid #4DD9C8',
+                    animation: 'spin 1s linear infinite',
+                  }} />
+                  <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)', margin: 0 }}>
+                    Получаем аудио от другого игрока...
+                  </p>
+                </div>
+              ) : (
+                /* ─── Audio ready — show controls ─── */
+                <>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'center', marginBottom: '8px' }}>
+                    <ActionButton onClick={() => handlePlayReversed(1.0)} disabled={audio.isPlaying} variant="cyan">
+                      🎧 Послушать реверс
+                    </ActionButton>
+                    <ActionButton onClick={handleMimicStart} disabled={!hasListened} variant="primary">
+                      🗣️ Начать повтор
+                    </ActionButton>
+                  </div>
+                  {/* Slow Mo */}
+                  {maxPowers.slow > 0 && (
+                    <div style={{ marginTop: '12px' }}>
+                      <button
+                        onClick={activateSlowMo}
+                        disabled={audio.isPlaying || slowMoActive || usedPowers.slow >= maxPowers.slow || !slowMoSupported}
+                        style={{
+                          padding: '10px 20px', borderRadius: '14px', cursor: 'pointer',
+                          background: slowMoActive
+                            ? 'linear-gradient(135deg, #059669, #10B981)'
+                            : usedPowers.slow >= maxPowers.slow
+                              ? 'rgba(255,255,255,0.04)'
+                              : 'rgba(16,185,129,0.15)',
+                          color: usedPowers.slow >= maxPowers.slow ? 'rgba(255,255,255,0.2)' : '#10B981',
+                          fontWeight: 700, fontSize: '13px',
+                          boxShadow: slowMoActive ? '0 0 20px rgba(16,185,129,0.4)' : 'none',
+                          transition: 'all 0.2s', display: 'inline-flex', alignItems: 'center', gap: '8px',
+                          border: `1px solid ${usedPowers.slow >= maxPowers.slow ? 'rgba(255,255,255,0.06)' : 'rgba(16,185,129,0.3)'}`,
+                        }}
+                      >
+                        {slowMoActive ? <BtnSpinner size={13} /> : '🐢'} {slowMoActive ? 'Загружаем...' : 'Slow Mo'}
+                        <span style={{ fontSize: '11px', opacity: 0.7 }}>{maxPowers.slow - usedPowers.slow}/{maxPowers.slow}</span>
+                      </button>
+                      {!slowMoSupported && <p style={{ fontSize: '11px', color: '#EF4444', marginTop: '6px' }}>⚠️ Недоступно на вашем устройстве</p>}
+                    </div>
+                  )}
+                  {!hasListened && (
+                    <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', margin: '8px 0 0' }}>
+                      ⚠️ Сначала послушайте реверс
+                    </p>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -1452,7 +1851,7 @@ export default function Game() {
             <div style={{ textAlign: 'center' }}>
               <div style={{
                 fontSize: '28px', fontWeight: 800, fontVariantNumeric: 'tabular-nums',
-                color: audio.recordingElapsed >= MAX_RECORDING_SECONDS - 5 ? '#EF4444' : '#A78BFA',
+                color: audio.recordingElapsed >= MAX_RECORDING_SECONDS - 5 ? '#EF4444' : '#4DD9C8',
                 marginBottom: '12px', transition: 'color 0.3s',
               }}>
                 {MAX_RECORDING_SECONDS - audio.recordingElapsed}с
@@ -1475,7 +1874,95 @@ export default function Game() {
               <ActionButton onClick={handlePlayMimicReversed} disabled={audio.isPlaying || uploading} variant="cyan">
                 🔊 Послушать свой реверс
               </ActionButton>
-              <div style={{ marginTop: '10px' }}>
+
+              {/* ⚡ Superpower bar */}
+              {(maxPowers.choices > 0 || maxPowers.vision > 0) && (
+                <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                  {/* AI Choices */}
+                  {maxPowers.choices > 0 && (
+                    <button
+                      onClick={activateChoices}
+                      disabled={choicesLoading || !!choicesOptions || usedPowers.choices >= maxPowers.choices}
+                      style={{
+                        padding: '10px 18px', borderRadius: '14px', border: 'none', cursor: 'pointer',
+                        background: choicesOptions
+                          ? 'rgba(245,158,11,0.08)'
+                          : usedPowers.choices >= maxPowers.choices
+                            ? 'rgba(255,255,255,0.04)'
+                            : 'rgba(245,158,11,0.15)',
+                        color: usedPowers.choices >= maxPowers.choices ? 'rgba(255,255,255,0.2)' : '#F59E0B',
+                        fontWeight: 700, fontSize: '13px',
+                        border: `1px solid ${usedPowers.choices >= maxPowers.choices ? 'rgba(255,255,255,0.06)' : 'rgba(245,158,11,0.3)'}`,
+                        transition: 'all 0.2s', display: 'inline-flex', alignItems: 'center', gap: '8px',
+                        opacity: choicesLoading ? 0.7 : 1,
+                      }}
+                    >
+                      {choicesLoading ? <BtnSpinner size={14} /> : '🎯'}
+                      {choicesOptions ? 'Варианты показаны' : 'AI Choices'}
+                      <span style={{ fontSize: '11px', opacity: 0.7 }}>{maxPowers.choices - usedPowers.choices}/{maxPowers.choices}</span>
+                    </button>
+                  )}
+                  {/* AI Vision */}
+                  {maxPowers.vision > 0 && (
+                    <button
+                      onClick={activateVision}
+                      disabled={visionLoading || !!visionImage || usedPowers.vision >= maxPowers.vision}
+                      style={{
+                        padding: '10px 18px', borderRadius: '14px', border: 'none', cursor: 'pointer',
+                        background: visionImage
+                          ? 'rgba(167,139,250,0.08)'
+                          : usedPowers.vision >= maxPowers.vision
+                            ? 'rgba(255,255,255,0.04)'
+                            : 'rgba(167,139,250,0.15)',
+                        color: usedPowers.vision >= maxPowers.vision ? 'rgba(255,255,255,0.2)' : '#4DD9C8',
+                        fontWeight: 700, fontSize: '13px',
+                        border: `1px solid ${usedPowers.vision >= maxPowers.vision ? 'rgba(255,255,255,0.06)' : 'rgba(167,139,250,0.3)'}`,
+                        transition: 'all 0.2s', display: 'inline-flex', alignItems: 'center', gap: '8px',
+                        opacity: visionLoading ? 0.7 : 1,
+                      }}
+                    >
+                      {visionLoading ? <BtnSpinner size={14} /> : '🎨'}
+                      {visionImage ? 'Vision готов' : 'AI Vision'}
+                      <span style={{ fontSize: '11px', opacity: 0.7 }}>{maxPowers.vision - usedPowers.vision}/{maxPowers.vision}</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* AI Choices options UI */}
+              {choicesOptions && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', textAlign: 'left', margin: 0 }}>🎯 Выбери правильный вариант:</p>
+                  {choicesOptions.map((opt, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setGuestGuessText(opt)}
+                      style={{
+                        padding: '12px 16px', borderRadius: '12px', border: 'none', textAlign: 'left',
+                        background: guestGuessText === opt
+                          ? 'linear-gradient(135deg, rgba(245,158,11,0.3), rgba(245,158,11,0.15))'
+                          : 'rgba(245,158,11,0.07)',
+                        color: 'white', fontWeight: guestGuessText === opt ? 700 : 500, fontSize: '14px',
+                        cursor: 'pointer', transition: 'all 0.15s',
+                        border: guestGuessText === opt ? '1px solid rgba(245,158,11,0.5)' : '1px solid rgba(245,158,11,0.15)',
+                        boxShadow: guestGuessText === opt ? '0 0 12px rgba(245,158,11,0.2)' : 'none',
+                      }}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* AI Vision image */}
+              {visionImage && (
+                <div style={{ borderRadius: '16px', overflow: 'hidden', border: '1px solid rgba(167,139,250,0.3)', boxShadow: '0 0 24px rgba(167,139,250,0.2)' }}>
+                  <img src={visionImage} alt="AI Vision" style={{ width: '100%', display: 'block' }} />
+                  <div style={{ background: 'rgba(167,139,250,0.08)', padding: '8px', textAlign: 'center', fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>🎨 AI Visual Hint</div>
+                </div>
+              )}
+
+              <div style={{ marginTop: '4px' }}>
                 <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)', marginBottom: '8px' }}>
                   Что изначально сказал(а) {(currentRound % 2 === 1 ? hostProfile : guestProfile)?.username || 'записывающий'}?
                 </p>
@@ -1522,7 +2009,7 @@ export default function Game() {
                   animation: 'pulse-glow 1.5s ease-in-out infinite',
                 }}>🤖</div>
               </div>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: '#A78BFA', minHeight: '20px', transition: 'opacity 0.4s' }}>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: '#4DD9C8', minHeight: '20px', transition: 'opacity 0.4s' }}>
                 {AI_QUIPS[aiQuipIdx]}
               </div>
               <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
@@ -1541,8 +2028,8 @@ export default function Game() {
           {phase === PHASES.HOST_VERIFY && !isRecorder && (
             <div style={{ textAlign: 'center', padding: '20px 0' }}>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', padding: '14px 24px', borderRadius: '16px', background: 'rgba(124,58,237,0.1)', border: '1px solid rgba(124,58,237,0.2)' }}>
-                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#A78BFA', animation: 'pulse-glow 1s ease-in-out infinite' }} />
-                <span style={{ fontSize: '14px', color: '#A78BFA', fontWeight: 600 }}>
+                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#4DD9C8', animation: 'pulse-glow 1s ease-in-out infinite' }} />
+                <span style={{ fontSize: '14px', color: '#4DD9C8', fontWeight: 600 }}>
                   {isHost ? 'Гость' : 'Хост'} проверяет фразу...
                 </span>
               </div>
@@ -1560,11 +2047,53 @@ export default function Game() {
                 <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '6px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
                   Раунд {currentRound} из {totalRounds}
                 </div>
-                <div className="score-reveal" style={{ fontSize: '52px', fontWeight: 900, color: '#A78BFA', marginBottom: '4px', lineHeight: 1 }}>
+                <div className="score-reveal" style={{ fontSize: '52px', fontWeight: 900, color: '#4DD9C8', marginBottom: '4px', lineHeight: 1 }}>
                   {animatedScore ?? '—'}
                 </div>
                 <div style={{ fontSize: '14px', color: 'rgba(255,255,255,0.3)', marginBottom: '12px' }}>/ 100</div>
                 {comment && <p style={{ fontSize: '14px', color: 'rgba(255,255,255,0.6)', margin: '0 0 16px' }}>{comment}</p>}
+                {/* Both players can listen to the guesser's attempt audio */}
+                {gameSession?.mimic_audio_url && (
+                  <button
+                    onClick={async () => {
+                      const { data } = await supabase.storage.from('audio').download(gameSession.mimic_audio_url)
+                      if (data) audio.playAudio(data, 1.0)
+                    }}
+                    disabled={audio.isPlaying}
+                    style={{
+                      marginTop: '12px', padding: '10px 20px', borderRadius: '12px',
+                      border: '1px solid rgba(167,139,250,0.3)',
+                      background: 'rgba(167,139,250,0.08)',
+                      color: '#4DD9C8', fontSize: '13px', fontWeight: 600,
+                      cursor: 'pointer', transition: 'all 0.2s', width: '100%',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(167,139,250,0.18)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(167,139,250,0.08)'}
+                  >
+                    🎧 Послушать попытку угадывающего
+                  </button>
+                )}
+                {/* Recorder can also hear the mimic reversed for fun */}
+                {isRecorder && gameSession?.mimic_reversed_url && (
+                  <button
+                    onClick={async () => {
+                      const { data } = await supabase.storage.from('audio').download(gameSession.mimic_reversed_url)
+                      if (data) audio.playAudio(data, 1.0)
+                    }}
+                    disabled={audio.isPlaying}
+                    style={{
+                      marginTop: '8px', padding: '10px 20px', borderRadius: '12px',
+                      border: '1px solid rgba(6,182,212,0.3)',
+                      background: 'rgba(6,182,212,0.08)',
+                      color: '#2DC4B2', fontSize: '13px', fontWeight: 600,
+                      cursor: 'pointer', transition: 'all 0.2s', width: '100%',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(6,182,212,0.18)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(6,182,212,0.08)'}
+                  >
+                    🔄 Послушать реверс соперника
+                  </button>
+                )}
                 {isHost ? (
                   <ActionButton
                     onClick={handleNextRound}
@@ -1576,7 +2105,7 @@ export default function Game() {
                   </ActionButton>
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center' }}>
-                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#A78BFA', animation: 'pulse-glow 1s ease-in-out infinite' }} />
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#4DD9C8', animation: 'pulse-glow 1s ease-in-out infinite' }} />
                     <p style={{ fontSize: '14px', color: 'rgba(255,255,255,0.5)', margin: 0 }}>Ожидание следующего раунда...</p>
                   </div>
                 )}
@@ -1601,53 +2130,180 @@ export default function Game() {
             const avgScore = roundScores.length > 0
               ? Math.round(roundScores.reduce((a, b) => a + b.score, 0) / roundScores.length)
               : (score ?? 0)
-            const isWinner = avgScore >= 70
-            const isTie = avgScore >= 50 && avgScore < 70
+            const isTie = !finalStats?.winnerId
+            const iAmWinner = finalStats?.winnerId === user?.id
             return (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', width: '100%' }}>
-                {/* Winner declaration banner */}
-                <div className={isWinner ? 'winner-banner' : isTie ? '' : 'loser-banner'} style={{
-                  padding: '28px 24px', borderRadius: '24px', textAlign: 'center', width: '100%',
-                  background: isWinner
-                    ? 'linear-gradient(135deg, rgba(16,185,129,0.15), rgba(124,58,237,0.1))'
-                    : isTie
-                    ? 'linear-gradient(135deg, rgba(245,158,11,0.12), rgba(124,58,237,0.08))'
-                    : 'linear-gradient(135deg, rgba(239,68,68,0.1), rgba(124,58,237,0.06))',
-                  border: `1px solid ${isWinner ? 'rgba(16,185,129,0.3)' : isTie ? 'rgba(245,158,11,0.3)' : 'rgba(239,68,68,0.25)'}`,
-                }}>
-                  <div style={{ fontSize: '48px', marginBottom: '6px' }}>
-                    {isWinner ? '🏆' : isTie ? '🤝' : '💪'}
-                  </div>
-                  <div style={{ fontSize: '22px', fontWeight: 900, marginBottom: '4px', color: isWinner ? '#10B981' : isTie ? '#F59E0B' : '#EF4444' }}>
-                    {isWinner ? 'Отличный результат!' : isTie ? 'Неплохо!' : 'Тренируйтесь!'}
-                  </div>
-                  <div className="score-reveal" style={{ fontSize: '64px', fontWeight: 900, color: isWinner ? '#10B981' : isTie ? '#F59E0B' : '#EF4444', lineHeight: 1, margin: '8px 0 2px' }}>
-                    {animatedScore}
-                  </div>
-                  <div style={{ fontSize: '16px', color: 'rgba(255,255,255,0.35)', marginBottom: '12px' }}>/ 100 среднее</div>
-                  <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)', margin: 0 }}>
-                    За {roundScores.length || 1} раунд{roundScores.length === 1 ? '' : roundScores.length < 5 ? 'а' : 'ов'}
-                  </p>
-                </div>
 
-                {/* Round-by-round table */}
-                {roundScores.length > 0 && (
-                  <div style={{ width: '100%', padding: '16px', borderRadius: '14px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
-                    <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)', marginBottom: '8px', fontWeight: 700, textTransform: 'uppercase' }}>Детализация</div>
-                    {roundScores.map((rs, i) => (
-                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: i < roundScores.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
-                        <span style={{ fontSize: '14px', color: 'rgba(255,255,255,0.7)' }}>Раунд {rs.round}</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <div style={{ width: '60px', height: '6px', borderRadius: '3px', background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
-                            <div style={{ width: `${rs.score}%`, height: '100%', borderRadius: '3px', background: rs.score >= 70 ? '#10B981' : rs.score >= 40 ? '#F59E0B' : '#EF4444', transition: 'width 0.5s' }} />
-                          </div>
-                          <span style={{ fontSize: '14px', fontWeight: 700, color: rs.score >= 70 ? '#10B981' : rs.score >= 40 ? '#F59E0B' : '#EF4444', minWidth: '40px', textAlign: 'right' }}>{rs.score}</span>
+                {/* ── HEAD-TO-HEAD SCOREBOARD ───────────────────────── */}
+                {finalStats ? (() => {
+                  const myIsHost = isHost
+                  const myScore = myIsHost ? finalStats.hostScore : finalStats.guestScore
+                  const theirScore = myIsHost ? finalStats.guestScore : finalStats.hostScore
+                  const myRoundsWon = myIsHost ? finalStats.hostRoundsWon : finalStats.guestRoundsWon
+                  const theirRoundsWon = myIsHost ? finalStats.guestRoundsWon : finalStats.hostRoundsWon
+                  const myProfile = myIsHost ? hostProfile : guestProfile
+                  const theirProfile = myIsHost ? guestProfile : hostProfile
+                  const xpEarned = Math.round(myScore / 5)
+                  const ratingDelta = iAmWinner ? finalStats.ratingChange : isTie ? 0 : -finalStats.ratingChange
+
+                  return (
+                    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {/* Winner banner */}
+                      <div style={{
+                        padding: '24px', borderRadius: '22px', textAlign: 'center',
+                        background: isTie
+                          ? 'linear-gradient(135deg, rgba(245,158,11,0.12), rgba(124,58,237,0.08))'
+                          : iAmWinner
+                          ? 'linear-gradient(135deg, rgba(16,185,129,0.15), rgba(124,58,237,0.1))'
+                          : 'linear-gradient(135deg, rgba(239,68,68,0.1), rgba(124,58,237,0.06))',
+                        border: `1px solid ${isTie ? 'rgba(245,158,11,0.3)' : iAmWinner ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.25)'}`,
+                      }}>
+                        <div style={{ fontSize: '44px', marginBottom: '6px' }}>{isTie ? '🤝' : iAmWinner ? '🏆' : '💪'}</div>
+                        <div style={{ fontSize: '21px', fontWeight: 900, color: isTie ? '#F59E0B' : iAmWinner ? '#10B981' : '#EF4444' }}>
+                          {isTie ? 'Ничья!' : iAmWinner
+                            ? `${myProfile?.username || 'Вы'} победил!`
+                            : `${theirProfile?.username || 'Соперник'} победил!`}
                         </div>
                       </div>
-                    ))}
+
+                      {/* Score vs Score */}
+                      <div style={{
+                        display: 'flex', alignItems: 'stretch', gap: '8px',
+                        padding: '20px', borderRadius: '20px',
+                        background: 'rgba(255,255,255,0.03)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                      }}>
+                        <div style={{ flex: 1, textAlign: 'center' }}>
+                          <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '6px', fontWeight: 600 }}>
+                            {myProfile?.username || 'Вы'}
+                          </div>
+                          <div style={{ fontSize: '44px', fontWeight: 900, color: iAmWinner ? '#10B981' : isTie ? '#F59E0B' : '#EF4444', lineHeight: 1 }}>
+                            {myScore}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginTop: '5px' }}>
+                            ✓ {myRoundsWon} отгадано
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', padding: '0 8px' }}>
+                          <span style={{ fontSize: '14px', fontWeight: 800, color: 'rgba(255,255,255,0.2)' }}>VS</span>
+                        </div>
+                        <div style={{ flex: 1, textAlign: 'center' }}>
+                          <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', marginBottom: '6px', fontWeight: 600 }}>
+                            {theirProfile?.username || 'Соперник'}
+                          </div>
+                          <div style={{ fontSize: '44px', fontWeight: 900, color: !iAmWinner && !isTie ? '#10B981' : isTie ? '#F59E0B' : '#EF4444', lineHeight: 1 }}>
+                            {theirScore}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginTop: '5px' }}>
+                            ✓ {theirRoundsWon} отгадано
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* XP + Rating badges */}
+                      <div style={{ display: 'flex', gap: '10px' }}>
+                        <div style={{
+                          flex: 1, padding: '12px', borderRadius: '14px', textAlign: 'center',
+                          background: 'rgba(124,58,237,0.1)', border: '1px solid rgba(124,58,237,0.2)',
+                        }}>
+                          <div style={{ fontSize: '20px', fontWeight: 900, color: '#4DD9C8' }}>+{xpEarned} XP</div>
+                          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginTop: '2px' }}>заработано</div>
+                        </div>
+                        <div style={{
+                          flex: 1, padding: '12px', borderRadius: '14px', textAlign: 'center',
+                          background: ratingDelta >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.08)',
+                          border: `1px solid ${ratingDelta >= 0 ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}`,
+                        }}>
+                          <div style={{ fontSize: '20px', fontWeight: 900, color: ratingDelta >= 0 ? '#10B981' : '#EF4444' }}>
+                            {ratingDelta >= 0 ? '▲' : '▼'}{Math.abs(ratingDelta)} pts
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginTop: '2px' }}>рейтинг</div>
+                        </div>
+                      </div>
+
+                      {/* Round breakdown */}
+                      {finalStats.roundDetails?.length > 0 && (
+                        <div style={{ width: '100%', padding: '16px', borderRadius: '14px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginBottom:'10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Детализация</div>
+                          {finalStats.roundDetails.map((rd, i) => {
+                            const guesserWasMe = myIsHost ? rd.recorder_id === room?.guest_id : rd.recorder_id === room?.host_id
+                            return (
+                              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: i < finalStats.roundDetails.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+                                <div>
+                                  <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.6)' }}>Раунд {rd.round}</span>
+                                  <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.3)', marginLeft: '8px' }}>
+                                    {guesserWasMe ? '(вы угадывали)' : '(вы записывали)'}
+                                  </span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <div style={{ width: '56px', height: '5px', borderRadius: '3px', background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+                                    <div style={{ width: `${rd.score}%`, height: '100%', borderRadius: '3px', background: rd.score >= 70 ? '#10B981' : rd.score >= 40 ? '#F59E0B' : '#EF4444' }} />
+                                  </div>
+                                  <span style={{ fontSize: '13px', fontWeight: 700, color: rd.score >= 70 ? '#10B981' : rd.score >= 40 ? '#F59E0B' : '#EF4444', minWidth: '36px', textAlign: 'right' }}>{rd.score}</span>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })() : (
+                  /* Fallback: finalStats not yet loaded */
+                  <div style={{ width: '100%', padding: '28px 24px', borderRadius: '24px', textAlign: 'center',
+                    background: 'linear-gradient(135deg, rgba(124,58,237,0.08), rgba(6,182,212,0.05))',
+                    border: '1px solid rgba(124,58,237,0.15)',
+                  }}>
+                    <div style={{ fontSize: '44px', marginBottom:'8px' }}>🏁</div>
+                    <div style={{ fontSize: '20px', fontWeight: 900, color: 'white', marginBottom: '4px' }}>Игра завершена!</div>
+                    <div className="score-reveal" style={{ fontSize: '60px', fontWeight: 900, color: '#4DD9C8', lineHeight: 1, margin: '10px 0 4px' }}>{animatedScore}</div>
+                    <div style={{ fontSize: '14px', color: 'rgba(255,255,255,0.35)' }}>/ 100 среднее</div>
                   </div>
                 )}
 
+                {/* Both players: listen to guesser's attempt */}
+                {gameSession?.mimic_audio_url && (
+                  <button
+                    onClick={async () => {
+                      const { data } = await supabase.storage.from('audio').download(gameSession.mimic_audio_url)
+                      if (data) audio.playAudio(data, 1.0)
+                    }}
+                    disabled={audio.isPlaying}
+                    style={{
+                      padding: '12px 24px', borderRadius: '14px',
+                      border: '1px solid rgba(167,139,250,0.3)',
+                      background: 'rgba(167,139,250,0.08)',
+                      color: '#4DD9C8', fontSize: '14px', fontWeight: 600,
+                      cursor: 'pointer', transition: 'all 0.2s', width: '100%',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(167,139,250,0.18)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(167,139,250,0.08)'}
+                  >
+                    🎧 Послушать попытку угадывающего
+                  </button>
+                )}
+                {/* Recorder: listen to mimic reversed for fun */}
+                {isRecorder && gameSession?.mimic_reversed_url && (
+                  <button
+                    onClick={async () => {
+                      const { data } = await supabase.storage.from('audio').download(gameSession.mimic_reversed_url)
+                      if (data) audio.playAudio(data, 1.0)
+                    }}
+                    disabled={audio.isPlaying}
+                    style={{
+                      padding: '12px 24px', borderRadius: '14px',
+                      border: '1px solid rgba(6,182,212,0.3)',
+                      background: 'rgba(6,182,212,0.08)',
+                      color: '#2DC4B2', fontSize: '14px', fontWeight: 600,
+                      cursor: 'pointer', transition: 'all 0.2s', width: '100%',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(6,182,212,0.18)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'rgba(6,182,212,0.08)'}
+                  >
+                    🔄 Послушать реверс соперника
+                  </button>
+                )}
                 {/* Rematch buttons */}
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'center' }}>
                   {!rematchRequested ? (
@@ -1663,10 +2319,10 @@ export default function Game() {
                     <div style={{
                       padding: '10px 20px', borderRadius: '12px',
                       background: 'rgba(124,58,237,0.1)', border: '1px solid rgba(124,58,237,0.2)',
-                      color: '#A78BFA', fontSize: '14px', fontWeight: 600,
+                      color: '#4DD9C8', fontSize: '14px', fontWeight: 600,
                       display: 'flex', alignItems: 'center', gap: '8px',
                     }}>
-                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#A78BFA', animation: 'pulse-glow 1s ease-in-out infinite' }} />
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#4DD9C8', animation: 'pulse-glow 1s ease-in-out infinite' }} />
                       Ожидание ответа...
                     </div>
                   )}
@@ -1675,10 +2331,10 @@ export default function Game() {
                   </ActionButton>
                   <ActionButton
                     onClick={() => {
-                      const avg = roundScores.length > 0 ? Math.round(roundScores.reduce((a, b) => a + b.score, 0) / roundScores.length) : score
-                      const text = `🎮 EchoFlip AI — Мой результат: ${avg ?? '??'}/100!\n${window.location.href}`
+                      const myScoreForShare = finalStats ? (isHost ? finalStats.hostScore : finalStats.guestScore) : (score ?? '??')
+                      const text = `🎮 ZVOO — Мой результат: ${myScoreForShare}!\n${window.location.href}`
                       if (navigator.share) {
-                        navigator.share({ title: 'EchoFlip AI', text }).catch(() => {})
+                        navigator.share({ title: 'ZVOO', text }).catch(() => {})
                       } else {
                         navigator.clipboard.writeText(text)
                         setCopied(true)
@@ -1737,6 +2393,9 @@ export default function Game() {
             50% { transform: scale(1.15); opacity: 1; }
             100% { transform: scale(1); opacity: 1; }
           }
+          @keyframes spin {
+            to { transform: rotate(360deg); }
+          }
         `}</style>
       </div>
 
@@ -1781,7 +2440,7 @@ export default function Game() {
                 Загаданная фраза:
               </div>
               <div style={{
-                fontSize: '26px', fontWeight: 800, color: '#A78BFA',
+                fontSize: '26px', fontWeight: 800, color: '#4DD9C8',
                 fontStyle: 'italic', lineHeight: 1.3,
                 textShadow: '0 0 30px rgba(167,139,250,0.4)',
               }}>

@@ -15,10 +15,10 @@ const TABS = [
 
 const LEVEL_COLORS = {
   DEBUG:   { bg: 'rgba(255,255,255,0.05)', text: 'rgba(255,255,255,0.5)', badge: 'rgba(255,255,255,0.08)' },
-  INFO:    { bg: 'rgba(6,182,212,0.05)',   text: '#67E8F9',              badge: 'rgba(6,182,212,0.15)' },
+  INFO:    { bg: 'rgba(6,182,212,0.05)',   text: '#7EEEE4',              badge: 'rgba(6,182,212,0.15)' },
   WARN:    { bg: 'rgba(245,158,11,0.05)',  text: '#FBBF24',              badge: 'rgba(245,158,11,0.15)' },
   ERROR:   { bg: 'rgba(239,68,68,0.05)',   text: '#FCA5A5',              badge: 'rgba(239,68,68,0.15)' },
-  NETWORK: { bg: 'rgba(124,58,237,0.05)',  text: '#A78BFA',              badge: 'rgba(124,58,237,0.15)' },
+  NETWORK: { bg: 'rgba(124,58,237,0.05)',  text: '#4DD9C8',              badge: 'rgba(124,58,237,0.15)' },
 }
 
 function formatTime(iso) {
@@ -167,7 +167,7 @@ export default function Admin() {
                   style={{
                     padding: '5px 10px', borderRadius: '8px', border: 'none', fontSize: '11px', fontWeight: 700,
                     background: levelFilter === lv ? 'rgba(124,58,237,0.25)' : 'rgba(255,255,255,0.05)',
-                    color: levelFilter === lv ? '#A78BFA' : 'rgba(255,255,255,0.4)',
+                    color: levelFilter === lv ? '#4DD9C8' : 'rgba(255,255,255,0.4)',
                     cursor: 'pointer',
                   }}
                 >{lv}</button>
@@ -318,7 +318,7 @@ export default function Admin() {
                     <span style={{
                       padding: '2px 8px', borderRadius: '4px', fontWeight: 700, fontSize: '11px',
                       background: d.method === 'POST' ? 'rgba(245,158,11,0.15)' : d.method === 'DELETE' ? 'rgba(239,68,68,0.15)' : 'rgba(6,182,212,0.15)',
-                      color: d.method === 'POST' ? '#FBBF24' : d.method === 'DELETE' ? '#FCA5A5' : '#67E8F9',
+                      color: d.method === 'POST' ? '#FBBF24' : d.method === 'DELETE' ? '#FCA5A5' : '#7EEEE4',
                       width: 'fit-content',
                     }}>{d.method || '?'}</span>
                     <span style={{ color: 'rgba(255,255,255,0.65)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -415,7 +415,7 @@ export default function Admin() {
               <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.4)', margin: '0 0 20px' }}>
                 Выберите версию модели Gemini. Эта настройка влияет на серверную часть (Edge Functions) и клиентские вызовы.
                 <br /><br />
-                Установленная сейчас модель: <strong style={{ color: '#06B6D4' }}>{savedModel}</strong>
+                Установленная сейчас модель: <strong style={{ color: '#2DC4B2' }}>{savedModel}</strong>
               </p>
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                 <select
@@ -439,7 +439,7 @@ export default function Admin() {
                   disabled={savingModel || geminiModel === savedModel}
                   style={{
                     padding: '12px 20px', borderRadius: '12px', border: 'none',
-                    background: geminiModel === savedModel ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+                    background: geminiModel === savedModel ? 'rgba(255,255,255,0.1)' : 'linear-gradient(135deg, #147A8A, #2DC4B2)',
                     color: geminiModel === savedModel ? 'rgba(255,255,255,0.4)' : 'white',
                     fontSize: '14px', fontWeight: 600, cursor: geminiModel === savedModel ? 'not-allowed' : 'pointer',
                     transition: 'all 0.2s',

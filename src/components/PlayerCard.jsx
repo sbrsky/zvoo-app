@@ -1,6 +1,6 @@
 export default function PlayerCard({ player, isHost, isOnline = false, isCurrentUser = false }) {
-  const accentColor = isHost ? '#7C3AED' : '#06B6D4'
-  const accentLight = isHost ? '#A78BFA' : '#67E8F9'
+  const accentColor = isHost ? '#147A8A' : '#2DC4B2'
+  const accentLight = isHost ? '#4DD9C8' : '#7EEEE4'
 
   if (!player) {
     return (
@@ -49,7 +49,7 @@ export default function PlayerCard({ player, isHost, isOnline = false, isCurrent
         <div style={{
           position: 'absolute', top: '-10px', left: '50%', transform: 'translateX(-50%)',
           fontSize: '10px', fontWeight: 800, padding: '2px 10px', borderRadius: '100px',
-          background: `linear-gradient(135deg, ${accentColor}, ${isHost ? '#06B6D4' : '#7C3AED'})`,
+          background: `linear-gradient(135deg, ${accentColor}, ${isHost ? '#2DC4B2' : '#147A8A'})`,
           color: 'white', letterSpacing: '0.08em', whiteSpace: 'nowrap',
         }}>ВЫ</div>
       )}
@@ -58,7 +58,7 @@ export default function PlayerCard({ player, isHost, isOnline = false, isCurrent
       <div style={{ position: 'relative' }}>
         <div style={{
           width: '60px', height: '60px', borderRadius: '50%',
-          background: `linear-gradient(135deg, ${accentColor}, ${isHost ? '#06B6D4' : '#7C3AED'})`,
+          background: `linear-gradient(135deg, ${accentColor}, ${isHost ? '#2DC4B2' : '#147A8A'})`,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: '22px', fontWeight: 800, color: 'white', overflow: 'hidden',
           boxShadow: `0 6px 20px rgba(${isHost ? '124,58,237' : '6,182,212'},0.3)`,

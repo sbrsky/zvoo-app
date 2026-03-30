@@ -71,6 +71,21 @@ export function useRoom(roomId, userId) {
           }
         }
       )
+      // ✅ Both players sync game_sessions in real-time (mimic_audio_url, scores, etc.)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'game_sessions', filter: `room_id=eq.${roomId}` },
+        ({ new: newSession }) => {
+          setGameSession(newSession)
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'game_sessions', filter: `room_id=eq.${roomId}` },
+        ({ new: updatedSession }) => {
+          setGameSession(updatedSession)
+        }
+      )
       // Game-state broadcast events (recording, scoring, etc.)
       .on('broadcast', { event: 'game_state' }, ({ payload }) => {
         setGameState(payload)
