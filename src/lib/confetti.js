@@ -3,7 +3,7 @@
  * Creates particle bursts in a container and auto-cleans up.
  */
 export function launchConfetti(container = document.body) {
-  const colors = ['#7C3AED', '#06B6D4', '#F59E0B', '#10B981', '#EF4444', '#A78BFA', '#67E8F9']
+  const colors = ['#147A8A', '#2DC4B2', '#F59E0B', '#10B981', '#EF4444', '#4DD9C8', '#7EEEE4']
   const particles = []
   const count = 80
 

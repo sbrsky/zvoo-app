@@ -16,9 +16,9 @@ export default defineConfig({
         'offline.html',
       ],
       manifest: {
-        id: '/echoflip',
-        name: 'EchoFlip AI — Reverse Audio Challenge',
-        short_name: 'EchoFlip',
+        id: '/zvoo',
+        name: 'ZVOO — Reverse Audio Challenge',
+        short_name: 'ZVOO',
         description: 'Мультиплеерная аудио-игра с AI-судьёй. Запиши фразу, переверни звук, бросай вызов друзьям!',
         lang: 'ru',
         theme_color: '#0A0A1A',

@@ -25,13 +25,13 @@ export default function AudioVisualizer({ analyserData, isActive = false, color 
 
     const gradient = ctx.createLinearGradient(0, 0, w, 0)
     if (color === 'violet') {
-      gradient.addColorStop(0, '#7C3AED')
-      gradient.addColorStop(0.5, '#A78BFA')
-      gradient.addColorStop(1, '#06B6D4')
+      gradient.addColorStop(0, '#147A8A')
+      gradient.addColorStop(0.5, '#4DD9C8')
+      gradient.addColorStop(1, '#2DC4B2')
     } else {
-      gradient.addColorStop(0, '#06B6D4')
-      gradient.addColorStop(0.5, '#67E8F9')
-      gradient.addColorStop(1, '#7C3AED')
+      gradient.addColorStop(0, '#2DC4B2')
+      gradient.addColorStop(0.5, '#7EEEE4')
+      gradient.addColorStop(1, '#147A8A')
     }
 
     // Draw bars
@@ -58,7 +58,7 @@ export default function AudioVisualizer({ analyserData, isActive = false, color 
       // Glow effect
       if (isActive && normalizedValue > 0.3) {
         ctx.globalAlpha = normalizedValue * 0.2
-        ctx.shadowColor = color === 'violet' ? '#7C3AED' : '#06B6D4'
+        ctx.shadowColor = color === 'violet' ? '#147A8A' : '#2DC4B2'
         ctx.shadowBlur = 15
         ctx.beginPath()
         ctx.roundRect(x, y, barWidth, barHeight, barWidth / 2)
@@ -84,8 +84,8 @@ function drawIdleWave(ctx, w, h, color) {
   const barWidth = (w / barCount) * 0.7
   const gap = (w / barCount) * 0.3
   const gradient = ctx.createLinearGradient(0, 0, w, 0)
-  gradient.addColorStop(0, color === 'violet' ? '#7C3AED' : '#06B6D4')
-  gradient.addColorStop(1, color === 'violet' ? '#06B6D4' : '#7C3AED')
+  gradient.addColorStop(0, color === 'violet' ? '#147A8A' : '#2DC4B2')
+  gradient.addColorStop(1, color === 'violet' ? '#2DC4B2' : '#147A8A')
 
   ctx.fillStyle = gradient
 

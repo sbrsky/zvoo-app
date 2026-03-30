@@ -8,6 +8,7 @@ import { useToast } from '../components/Toast'
 import { BtnSpinner } from '../components/BtnSpinner'
 import { LANGUAGES, DEFAULT_LANGUAGE_ID } from '../lib/languages'
 import { SUPERPOWERS } from '../lib/superpowers'
+import { UserProfileDrawer } from '../components/UserProfileDrawer'
 
 export default function Lobby() {
   const { user, profile } = useAuth()
@@ -27,6 +28,7 @@ export default function Lobby() {
   const [spConfig, setSpConfig] = useState({ slow: 1, choices: 1, vision: 1 })
   const navigate = useNavigate()
   const toast = useToast()
+  const [drawerUserId, setDrawerUserId] = useState(null)
 
   // Sync selectedLang with profile's preferred_language once it loads
   useEffect(() => {
@@ -41,9 +43,13 @@ export default function Lobby() {
 
   useEffect(() => {
     fetchRooms()
+    // Use a unique channel name to avoid conflicts across tabs
+    const channelName = `lobby_rooms_${Math.random().toString(36).slice(2)}`
     const channel = supabase
-      .channel('rooms_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms' }, () => fetchRooms())
+      .channel(channelName)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rooms' }, () => fetchRooms())
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms' }, () => fetchRooms())
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'rooms' }, () => fetchRooms())
       .subscribe()
     return () => supabase.removeChannel(channel)
   }, [])
@@ -179,7 +185,7 @@ export default function Lobby() {
           style={{
             padding: '14px 28px',
             borderRadius: '16px', border: 'none',
-            background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+            background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
             color: 'white', fontWeight: 700, fontSize: '15px',
             boxShadow: '0 8px 30px rgba(124,58,237,0.4)',
             whiteSpace: 'nowrap',
@@ -193,7 +199,7 @@ export default function Lobby() {
           style={{
             padding: '14px 28px', borderRadius: '16px',
             border: '1px solid rgba(124,58,237,0.3)', background: 'rgba(124,58,237,0.08)',
-            color: '#A78BFA', fontWeight: 700, fontSize: '15px',
+            color: '#4DD9C8', fontWeight: 700, fontSize: '15px',
             whiteSpace: 'nowrap',
           }}
         >
@@ -274,7 +280,7 @@ export default function Lobby() {
                           ? 'rgba(124,58,237,0.08)'
                           : 'rgba(255,255,255,0.04)',
                       border: isMyTurn
-                        ? '2px solid #A78BFA'
+                        ? '2px solid #4DD9C8'
                         : `1px solid ${isMyRoom ? 'rgba(124,58,237,0.25)' : 'rgba(255,255,255,0.08)'}`,
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px',
                       cursor: isMyRoom || canJoin ? 'pointer' : 'default',
@@ -297,7 +303,7 @@ export default function Lobby() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                       <div style={{
                         width: '44px', height: '44px', borderRadius: '14px', flexShrink: 0,
-                        background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+                        background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         color: 'white', fontWeight: 800, fontSize: '16px',
                       }}>
@@ -305,9 +311,16 @@ export default function Lobby() {
                       </div>
                       <div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ fontWeight: 700, color: 'white', fontSize: '15px' }}>
+                          <button
+                            onClick={e => { e.stopPropagation(); room.host_id && setDrawerUserId(room.host_id) }}
+                            style={{
+                              background: 'none', border: 'none', padding: 0,
+                              fontWeight: 700, color: 'white', fontSize: '15px',
+                              cursor: 'pointer',
+                            }}
+                          >
                             {room.host?.username || 'Unknown'}
-                          </span>
+                          </button>
                           {isMyTurn && (
                             <span style={{
                               fontSize: '11px', padding: '2px 10px', borderRadius: '100px',
@@ -319,7 +332,7 @@ export default function Lobby() {
                             </span>
                           )}
                           {!isMyTurn && isMyRoom && (
-                            <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '100px', background: 'rgba(124,58,237,0.2)', color: '#A78BFA', fontWeight: 600 }}>
+                            <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '100px', background: 'rgba(124,58,237,0.2)', color: '#4DD9C8', fontWeight: 600 }}>
                               Моя
                             </span>
                           )}
@@ -360,7 +373,18 @@ export default function Lobby() {
                           })()}
                           {room.guest && (
                             <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)' }}>
-                              vs {room.guest.username}
+                              vs{' '}
+                              <button
+                                onClick={e => { e.stopPropagation(); room.guest_id && setDrawerUserId(room.guest_id) }}
+                                style={{
+                                  background: 'none', border: 'none', padding: 0,
+                                  color: '#4DD9C8', fontSize: '12px', fontWeight: 600,
+                                  cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted',
+                                  textUnderlineOffset: '2px',
+                                }}
+                              >
+                                {room.guest.username}
+                              </button>
                             </span>
                           )}
                         </div>
@@ -390,7 +414,7 @@ export default function Lobby() {
                           className="btn-game"
                           style={{
                             padding: '8px 18px', borderRadius: '12px', border: 'none',
-                            background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+                            background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
                             color: 'white', fontWeight: 700, fontSize: '13px',
                             boxShadow: '0 4px 16px rgba(124,58,237,0.35)',
                           }}
@@ -503,7 +527,7 @@ export default function Lobby() {
                     display: 'flex', alignItems: 'center', gap: '8px',
                     transition: 'all 0.18s',
                     background: selectedLang === lang.id
-                      ? 'linear-gradient(135deg, #7C3AED, #06B6D4)'
+                      ? 'linear-gradient(135deg, #147A8A, #2DC4B2)'
                       : 'rgba(255,255,255,0.07)',
                     color: selectedLang === lang.id ? 'white' : 'rgba(255,255,255,0.55)',
                     boxShadow: selectedLang === lang.id ? '0 4px 16px rgba(124,58,237,0.35)' : 'none',
@@ -553,7 +577,7 @@ export default function Lobby() {
             Выбери количество раундов
           </p>
           <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginBottom: '24px' }}>
-            {[3, 5, 7].map(n => {
+            {[2, 4, 6].map(n => {
               const isPending = pendingRounds === n
               const isOtherPending = pendingRounds !== null && pendingRounds !== n
               return (
@@ -565,7 +589,7 @@ export default function Lobby() {
                   style={{
                     width: '90px', padding: '20px 0', borderRadius: '18px', border: 'none',
                     background: isPending
-                      ? 'linear-gradient(135deg, #7C3AED, #06B6D4)'
+                      ? 'linear-gradient(135deg, #147A8A, #2DC4B2)'
                       : 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(6,182,212,0.2))',
                     boxShadow: isPending ? '0 8px 30px rgba(124,58,237,0.4)' : 'none',
                     opacity: isOtherPending ? 0.4 : 1,
@@ -576,7 +600,7 @@ export default function Lobby() {
                   {isPending ? (
                     <><BtnSpinner size={22} /><span style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.7)' }}>Создаём...</span></>
                   ) : (
-                    <><span style={{ fontSize: '28px', fontWeight: 900, color: '#fff' }}>{n}</span><span style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.5)' }}>раунд{n === 3 ? 'а' : 'ов'}</span></>
+                    <><span style={{ fontSize: '28px', fontWeight: 900, color: '#fff' }}>{n}</span><span style={{ fontSize: '11px', fontWeight: 600, color: 'rgba(255,255,255,0.5)' }}>раунд{n === 2 ? 'а' : 'ов'}</span></>
                   )}
                 </button>
               )
@@ -595,6 +619,12 @@ export default function Lobby() {
           </button>
         </div>
       </div>
+    )}
+    {drawerUserId && (
+      <UserProfileDrawer
+        userId={drawerUserId}
+        onClose={() => setDrawerUserId(null)}
+      />
     )}
   </>
   )

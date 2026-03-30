@@ -86,8 +86,8 @@ export default function TestRunner() {
             disabled={status === 'running'}
             style={{
               padding: '10px 22px', borderRadius: '10px', border: 'none', fontSize: '13px', fontWeight: 700,
-              background: status === 'running' ? 'rgba(124,58,237,0.15)' : 'linear-gradient(135deg, #7C3AED, #4F46E5)',
-              color: status === 'running' ? '#A78BFA' : 'white',
+              background: status === 'running' ? 'rgba(124,58,237,0.15)' : 'linear-gradient(135deg, #147A8A, #4F46E5)',
+              color: status === 'running' ? '#4DD9C8' : 'white',
               cursor: status === 'running' ? 'not-allowed' : 'pointer',
               transition: 'all 0.2s',
               boxShadow: status !== 'running' ? '0 4px 20px rgba(124,58,237,0.35)' : 'none',

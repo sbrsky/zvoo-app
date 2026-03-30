@@ -10,13 +10,13 @@ const features = [
     icon: <Mic className="w-8 h-8" />,
     title: 'Запись и реверс',
     desc: 'Мгновенная трансформация твоей речи в загадочную «тарабарщину».',
-    color: '#7C3AED',
+    color: '#147A8A',
   },
   {
     icon: <Users className="w-8 h-8" />,
     title: 'Realtime Мультиплеер',
     desc: 'Бросай вызов друзьям где угодно с молниеносной синхронизацией.',
-    color: '#06B6D4',
+    color: '#2DC4B2',
   },
   {
     icon: <Cpu className="w-8 h-8" />,
@@ -111,9 +111,9 @@ export default function LandingV2() {
   return (
     <>
     <Helmet>
-      <title>EchoFlip AI | Reverse Audio Gamified Challenge 2026</title>
+      <title>ZVOO | Reverse Audio Gamified Challenge 2026</title>
       <meta name="description" content="Твой голос. Обратная перемотка. Искусственный интеллект в роли беспристрастного судьи. Брось вызов реальности в главном лингвистическом тренде 2026 года." />
-      <meta property="og:title" content="EchoFlip AI - AI Multi-player Audio Game" />
+      <meta property="og:title" content="ZVOO - AI Multi-player Audio Game" />
       <meta property="og:description" content="Мгновенная трансформация твоей речи в загадочную «тарабарщину» с судейством нейросети Gemini." />
       <meta property="og:type" content="website" />
       <meta name="theme-color" content="#05050A" />
@@ -123,7 +123,7 @@ export default function LandingV2() {
           {
             "@context": "https://schema.org",
             "@type": "SoftwareApplication",
-            "name": "EchoFlip AI",
+            "name": "ZVOO",
             "applicationCategory": "GameApplication",
             "operatingSystem": "Web",
             "description": "AI-мультиплеерная аудио игра с обратной перемоткой звука и оценкой от Gemini."
@@ -155,7 +155,7 @@ export default function LandingV2() {
           left: 0,
           width: '800px',
           height: '800px',
-          background: 'radial-gradient(circle, rgba(124, 58, 237, 0.15) 0%, transparent 60%)',
+          background: 'radial-gradient(circle, rgba(20, 122, 138, 0.15) 0%, transparent 60%)',
           borderRadius: '50%',
           pointerEvents: 'none',
           zIndex: 0,
@@ -175,7 +175,7 @@ export default function LandingV2() {
           left: 0,
           width: '600px',
           height: '600px',
-          background: 'radial-gradient(circle, rgba(6, 182, 212, 0.1) 0%, transparent 50%)',
+          background: 'radial-gradient(circle, rgba(45, 196, 178, 0.1) 0%, transparent 50%)',
           borderRadius: '50%',
           pointerEvents: 'none',
           zIndex: 0,
@@ -215,8 +215,8 @@ export default function LandingV2() {
             }}
           >
             <span style={{ position: 'relative', display: 'flex', height: '10px', width: '10px' }}>
-              <span style={{ animate: 'ping', position: 'absolute', display: 'inline-flex', height: '100%', width: '100%', borderRadius: '50%', backgroundColor: '#06B6D4', opacity: 0.75, animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' }}></span>
-              <span style={{ position: 'relative', display: 'inline-flex', borderRadius: '50%', height: '10px', width: '10px', backgroundColor: '#06B6D4' }}></span>
+              <span style={{ animate: 'ping', position: 'absolute', display: 'inline-flex', height: '100%', width: '100%', borderRadius: '50%', backgroundColor: '#2DC4B2', opacity: 0.75, animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' }}></span>
+              <span style={{ position: 'relative', display: 'inline-flex', borderRadius: '50%', height: '10px', width: '10px', backgroundColor: '#2DC4B2' }}></span>
             </span>
             <span style={{ fontSize: '14px', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', color: '#A1A1AA' }}>
               Next-Gen Audio Experience
@@ -236,8 +236,8 @@ export default function LandingV2() {
               filter: 'drop-shadow(0px 10px 30px rgba(0,0,0,0.5))',
             }}
           >
-            <AnimatedText text="EchoFlip" />
-            <span style={{ display: 'block', backgroundImage: 'linear-gradient(135deg, #7C3AED 0%, #06B6D4 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+            <AnimatedText text="ZVOO" />
+            <span style={{ display: 'block', backgroundImage: 'linear-gradient(135deg, #147A8A 0%, #2DC4B2 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
                <AnimatedText text="AI Challenge" delay={2} />
             </span>
           </h1>
@@ -265,12 +265,12 @@ export default function LandingV2() {
           >
             <Link to={user ? '/lobby' : '/login'} style={{ textDecoration: 'none' }} aria-label={user ? 'Перейти в лобби' : 'Начать Эхо-Тест'}>
               <motion.div
-                whileHover={{ scale: 1.05, boxShadow: '0 0 40px rgba(124, 58, 237, 0.4)' }}
+                whileHover={{ scale: 1.05, boxShadow: '0 0 40px rgba(20, 122, 138, 0.4)' }}
                 whileTap={{ scale: 0.95 }}
                 style={{
                   padding: '18px 40px',
                   borderRadius: '100px',
-                  background: 'linear-gradient(135deg, #7C3AED 0%, #06B6D4 100%)',
+                  background: 'linear-gradient(135deg, #147A8A 0%, #2DC4B2 100%)',
                   color: '#FFF',
                   fontSize: '1.1rem',
                   fontWeight: 700,
@@ -334,7 +334,7 @@ export default function LandingV2() {
           style={{ textAlign: 'center', marginBottom: '80px', fontSize: 'clamp(2.5rem, 5vw, 4rem)', fontWeight: 800 }}
         >
           <AnimatedText
-            text="Почему EchoFlip — это хит?"
+            text="Почему ZVOO — это хит?"
             className="feature-title"
           />
         </motion.h2>
@@ -394,7 +394,7 @@ export default function LandingV2() {
       <section
         style={{
           padding: '120px 24px',
-          background: 'linear-gradient(180deg, transparent 0%, rgba(124, 58, 237, 0.1) 100%)',
+          background: 'linear-gradient(180deg, transparent 0%, rgba(20, 122, 138, 0.1) 100%)',
           position: 'relative',
           zIndex: 10,
           textAlign: 'center',

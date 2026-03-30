@@ -4,6 +4,7 @@ import ErrorBoundary from './components/ErrorBoundary'
 import Navbar from './components/Navbar'
 import { ToastProvider } from './components/Toast'
 import PWAManager from './components/PWAManager'
+import { NetworkBanner } from './components/NetworkBanner'
 import Landing from './pages/Landing'
 import LandingV2 from './pages/LandingV2'
 import Login from './pages/Login'
@@ -22,7 +23,7 @@ function ProtectedRoute({ children }) {
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{
           width: '52px', height: '52px', borderRadius: '18px',
-          background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+          background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: '22px',
           animation: 'pulse-glow 1.5s ease-in-out infinite',
@@ -41,7 +42,7 @@ function AdminRoute({ children }) {
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{
           width: '52px', height: '52px', borderRadius: '18px',
-          background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+          background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: '22px',
           animation: 'pulse-glow 1.5s ease-in-out infinite',
@@ -61,6 +62,7 @@ export default function App() {
     <ErrorBoundary>
     <ToastProvider>
     <div style={{ minHeight: '100vh', background: '#0A0A1A' }}>
+      <NetworkBanner />
       <Navbar />
       <PWAManager />
       <Routes>

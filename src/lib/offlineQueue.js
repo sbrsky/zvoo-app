@@ -4,7 +4,7 @@
  */
 import logger from './logger.js'
 
-const STORAGE_KEY = 'echoflip_offline_queue'
+const STORAGE_KEY = 'zvoo_offline_queue'
 
 class OfflineQueue {
   constructor() {
@@ -67,7 +67,7 @@ class OfflineQueue {
         // Operations are stored as serializable data — the consumer must handle replay
         // For now, we emit an event for each queued operation
         if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('echoflip:replay', { detail: op }))
+          window.dispatchEvent(new CustomEvent('zvoo:replay', { detail: op }))
         }
       } catch (err) {
         logger.error('offline-queue', `Flush failed: ${op.type}`, { error: err.message })

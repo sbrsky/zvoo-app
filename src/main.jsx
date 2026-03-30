@@ -11,7 +11,7 @@ import './index.css'
 // Initialize logging infrastructure
 logger.interceptConsole()
 interceptNetwork()
-logger.info('app', 'EchoFlip AI started')
+logger.info('app', 'ZVOO started')
 
 createRoot(document.getElementById('root')).render(
   <HelmetProvider>

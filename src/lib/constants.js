@@ -1,4 +1,4 @@
-export const APP_NAME = 'EchoFlip AI'
+export const APP_NAME = 'ZVOO'
 
 export const ROOM_STATUS = {
   WAITING: 'waiting',

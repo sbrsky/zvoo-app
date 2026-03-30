@@ -53,12 +53,12 @@ export function useInstallPrompt() {
     setIsInstallable(false)
     setDeferredPrompt(null)
     // Remember dismissal for 7 days
-    localStorage.setItem('echoflip_install_dismissed', Date.now().toString())
+    localStorage.setItem('zvoo_install_dismissed', Date.now().toString())
   }, [])
 
   // Check if recently dismissed
   const wasDismissed = (() => {
-    const ts = localStorage.getItem('echoflip_install_dismissed')
+    const ts = localStorage.getItem('zvoo_install_dismissed')
     if (!ts) return false
     return Date.now() - parseInt(ts, 10) < 7 * 24 * 60 * 60 * 1000
   })()

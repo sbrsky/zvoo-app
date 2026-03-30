@@ -43,19 +43,12 @@ export default function Navbar() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: '64px' }}>
 
           {/* Logo */}
-          <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none' }}>
-            <div style={{
-              width: '36px', height: '36px', borderRadius: '12px',
-              background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontWeight: 900, color: 'white', fontSize: '14px',
-              transition: 'transform 0.2s',
-            }}>↩</div>
-            <span style={{
-              fontWeight: 700, fontSize: '18px', letterSpacing: '-0.01em',
-              background: 'linear-gradient(135deg, #A78BFA, #67E8F9)',
-              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
-            }}>{APP_NAME}</span>
+          <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: '8px', textDecoration: 'none' }}>
+            <img
+              src="/zvoo-logo.png"
+              alt="ZVOO"
+              style={{ height: '48px', width: 'auto', objectFit: 'contain' }}
+            />
           </Link>
 
           {/* Right side */}
@@ -84,7 +77,7 @@ export default function Navbar() {
                   >
                     <div style={{
                       width: '28px', height: '28px', borderRadius: '50%',
-                      background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+                      background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                       color: 'white', fontSize: '12px', fontWeight: 700, overflow: 'hidden',
                     }}>
@@ -175,7 +168,7 @@ export default function Navbar() {
               <Link to="/login" style={{
                 fontSize: '14px', padding: '10px 20px', borderRadius: '12px',
                 fontWeight: 600, color: 'white', textDecoration: 'none',
-                background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+                background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
                 transition: 'all 0.2s',
               }}>Войти</Link>
             )}

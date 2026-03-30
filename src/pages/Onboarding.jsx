@@ -11,10 +11,10 @@ export default function Onboarding() {
 
   const slides = [
     {
-      title: "Добро пожаловать в EchoFlip! 🪞",
+      title: "Добро пожаловать в ZVOO! 🪞",
       desc: "Это игра, где тебе придётся вывихнуть мозг, чтобы говорить задом наперёд.",
       icon: "🤯",
-      bg: "linear-gradient(135deg, #7C3AED, #06B6D4)"
+      bg: "linear-gradient(135deg, #147A8A, #2DC4B2)"
     },
     {
       title: "Как это работает?",

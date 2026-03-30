@@ -2,18 +2,18 @@
 @import "tailwindcss";
 
 @theme {
-  --color-navy: #0A0A1A;
-  --color-navy-light: #12122A;
-  --color-navy-card: #1A1A3A;
-  --color-violet: #7C3AED;
-  --color-violet-dark: #5B21B6;
-  --color-violet-light: #A78BFA;
-  --color-cyan: #06B6D4;
-  --color-cyan-dark: #0891B2;
-  --color-cyan-light: #67E8F9;
-  --color-glass: rgba(255, 255, 255, 0.06);
-  --color-glass-border: rgba(255, 255, 255, 0.12);
-  --color-glass-hover: rgba(255, 255, 255, 0.1);
+  --color-navy: #080F14;
+  --color-navy-light: #0E1A22;
+  --color-navy-card: #142028;
+  --color-violet: #147A8A;
+  --color-violet-dark: #0E5E6F;
+  --color-violet-light: #4DD9C8;
+  --color-cyan: #2DC4B2;
+  --color-cyan-dark: #1A9B8C;
+  --color-cyan-light: #7EEEE4;
+  --color-glass: rgba(45, 196, 178, 0.06);
+  --color-glass-border: rgba(45, 196, 178, 0.14);
+  --color-glass-hover: rgba(45, 196, 178, 0.1);
   --color-success: #10B981;
   --color-warning: #F59E0B;
   --color-error: #EF4444;
@@ -79,7 +79,7 @@ body {
 
 /* Gradient text */
 .gradient-text {
-  background: linear-gradient(135deg, var(--color-violet-light), var(--color-cyan));
+  background: linear-gradient(135deg, var(--color-violet-light), var(--color-cyan-light));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -87,11 +87,11 @@ body {
 
 /* Glow effects */
 .glow-violet {
-  box-shadow: 0 0 30px rgba(124, 58, 237, 0.3), 0 0 60px rgba(124, 58, 237, 0.1);
+  box-shadow: 0 0 30px rgba(20, 122, 138, 0.4), 0 0 60px rgba(20, 122, 138, 0.15);
 }
 
 .glow-cyan {
-  box-shadow: 0 0 30px rgba(6, 182, 212, 0.3), 0 0 60px rgba(6, 182, 212, 0.1);
+  box-shadow: 0 0 30px rgba(45, 196, 178, 0.4), 0 0 60px rgba(45, 196, 178, 0.15);
 }
 
 /* Animated gradient border */
@@ -106,7 +106,7 @@ body {
   inset: -1px;
   border-radius: inherit;
   padding: 1px;
-  background: linear-gradient(135deg, var(--color-violet), var(--color-cyan));
+  background: linear-gradient(135deg, var(--color-violet), var(--color-cyan-light));
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;

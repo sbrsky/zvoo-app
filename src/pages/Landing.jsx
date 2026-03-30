@@ -78,9 +78,9 @@ export default function Landing() {
             borderRadius: '100px',
             background: 'rgba(124,58,237,0.12)',
             border: '1px solid rgba(124,58,237,0.3)',
-            fontSize: '13px', color: '#A78BFA', fontWeight: 600,
+            fontSize: '13px', color: '#4DD9C8', fontWeight: 600,
           }}>
-            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#A78BFA', display: 'inline-block', animation: 'pulse-glow 2s ease-in-out infinite' }} />
+            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#4DD9C8', display: 'inline-block', animation: 'pulse-glow 2s ease-in-out infinite' }} />
             AI-мультиплеерная аудио игра
           </div>
 
@@ -89,7 +89,7 @@ export default function Landing() {
             <div style={{
               width: '96px', height: '96px', margin: '0 auto',
               borderRadius: '28px',
-              background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+              background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontSize: '44px',
               boxShadow: '0 20px 60px rgba(124,58,237,0.4), 0 0 100px rgba(124,58,237,0.15)',
@@ -103,12 +103,12 @@ export default function Landing() {
             margin: '0 0 20px', letterSpacing: '-0.03em',
           }}>
             <span style={{
-              background: 'linear-gradient(135deg, #A78BFA 0%, #67E8F9 60%, #A78BFA 100%)',
+              background: 'linear-gradient(135deg, #4DD9C8 0%, #7EEEE4 60%, #4DD9C8 100%)',
               WebkitBackgroundClip: 'text',
               WebkitTextFillColor: 'transparent',
               backgroundClip: 'text',
               backgroundSize: '200%',
-            }}>EchoFlip</span>
+            }}>ZVOO</span>
             <span style={{ color: 'white' }}> AI</span>
           </h1>
 
@@ -130,7 +130,7 @@ export default function Landing() {
               style={{
                 padding: '16px 36px',
                 borderRadius: '16px',
-                background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+                background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
                 color: 'white', fontWeight: 700, fontSize: '16px',
                 textDecoration: 'none',
                 boxShadow: '0 12px 40px rgba(124,58,237,0.4)',
@@ -168,7 +168,7 @@ export default function Landing() {
       {/* How it works */}
       <section style={{ padding: '80px 24px', maxWidth: '1100px', margin: '0 auto', width: '100%' }}>
         <div style={{ textAlign: 'center', marginBottom: '64px' }}>
-          <p style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.15em', color: '#A78BFA', marginBottom: '12px' }}>КАК ЭТО РАБОТАЕТ</p>
+          <p style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.15em', color: '#4DD9C8', marginBottom: '12px' }}>КАК ЭТО РАБОТАЕТ</p>
           <h2 style={{ fontSize: 'clamp(28px, 4vw, 42px)', fontWeight: 800, color: 'white', margin: 0 }}>
             4 шага до победы
           </h2>
@@ -187,10 +187,10 @@ export default function Landing() {
               <div style={{
                 position: 'absolute', top: 0, right: 0, left: 0,
                 height: '2px',
-                background: 'linear-gradient(90deg, #7C3AED, #06B6D4)',
+                background: 'linear-gradient(90deg, #147A8A, #2DC4B2)',
                 opacity: 0.6,
               }} />
-              <div style={{ fontSize: '13px', fontWeight: 800, color: '#7C3AED', marginBottom: '12px', letterSpacing: '0.05em' }}>
+              <div style={{ fontSize: '13px', fontWeight: 800, color: '#147A8A', marginBottom: '12px', letterSpacing: '0.05em' }}>
                 {s.step}
               </div>
               <div style={{ fontSize: '36px', marginBottom: '12px' }}>{s.icon}</div>
@@ -233,7 +233,7 @@ export default function Landing() {
         fontSize: '13px',
         color: 'rgba(255,255,255,0.25)',
       }}>
-        EchoFlip AI © 2026 · Powered by Supabase & Gemini AI
+        ZVOO © 2026 · Powered by Supabase & Gemini AI
       </footer>
     </div>
   )

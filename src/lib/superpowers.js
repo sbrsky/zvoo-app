@@ -1,5 +1,5 @@
 /**
- * EchoFlip Superpower System
+ * ZVOO Superpower System
  *
  * To add a new superpower:
  *  1. Add an entry to SUPERPOWERS array
@@ -42,7 +42,7 @@ export const SUPERPOWERS = [
     name: 'AI Vision',
     shortDesc: 'ИИ-подсказка',
     fullDesc: 'ИИ нарисует визуальную подсказку о загаданной фразе',
-    color: '#A78BFA',       // violet
+    color: '#4DD9C8',       // violet
     glowColor: 'rgba(167,139,250,0.35)',
     dbMaxKey: 'sp_vision_max',
     dbUsedKey: 'sp_vision_used',

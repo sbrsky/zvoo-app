@@ -64,7 +64,7 @@ function UpdateToast() {
         onClick={() => updateServiceWorker(true)}
         style={{
           padding: '8px 16px', borderRadius: '10px', border: 'none',
-          background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+          background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
           color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
           transition: 'transform 0.2s',
         }}
@@ -109,13 +109,13 @@ function InstallBanner() {
     }}>
       <div style={{
         width: '44px', height: '44px', borderRadius: '14px', flexShrink: 0,
-        background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+        background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         fontSize: '20px',
       }}>📱</div>
       <div style={{ flex: 1 }}>
         <p style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#E2E8F0' }}>
-          Установить EchoFlip
+          Установить ZVOO
         </p>
         <p style={{ margin: '3px 0 0', fontSize: '12px', color: 'rgba(255,255,255,0.45)' }}>
           Быстрый доступ прямо с рабочего стола
@@ -134,7 +134,7 @@ function InstallBanner() {
           onClick={promptInstall}
           style={{
             padding: '8px 16px', borderRadius: '10px', border: 'none',
-            background: 'linear-gradient(135deg, #7C3AED, #06B6D4)',
+            background: 'linear-gradient(135deg, #147A8A, #2DC4B2)',
             color: 'white', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
             transition: 'transform 0.2s',
           }}

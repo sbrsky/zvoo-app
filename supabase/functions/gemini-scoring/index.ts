@@ -217,24 +217,43 @@ serve(async (req) => {
 Generate exactly 4 options for a multiple-choice quiz, in ${langLabel}:
 - 1 option must be the EXACT original phrase (copy it verbatim)
 - 3 options must be plausible-sounding but INCORRECT alternatives (similar phonetically or thematically)
-Respond ONLY with a JSON array of 4 strings, randomly shuffled. Example: ["phrase A", "phrase B", "phrase C", "phrase D"]
+IMPORTANT: all 4 options MUST be different from each other — no duplicates allowed.
+Respond ONLY with a JSON array of exactly 4 unique strings, randomly shuffled. Example: ["phrase A", "phrase B", "phrase C", "phrase D"]
 No markdown, no explanation, just the JSON array.`
-      const choiceReq = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.9, maxOutputTokens: 300 } }
+      const choiceReq = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 1.0, maxOutputTokens: 300 } }
       let choiceData
       try { choiceData = await callGemini(models.primary, choiceReq) }
       catch { choiceData = await callGemini(models.fallback, choiceReq) }
       const raw = choiceData?.candidates?.[0]?.content?.parts?.[0]?.text || '[]'
       const match = raw.match(/\[[\s\S]*?\]/)
       let choices: string[] = []
-      try { choices = JSON.parse(match ? match[0] : '[]') } catch { choices = [transcription, '???', '???', '???'] }
-      // Ensure correct answer is always in the list
-      if (!choices.includes(transcription)) choices[0] = transcription
-      // Shuffle
+      try { choices = JSON.parse(match ? match[0] : '[]') } catch { choices = [] }
+
+      // Dedup: remove any duplicates, keep unique values
+      choices = [...new Set(choices.map((c: string) => String(c).trim()).filter(Boolean))]
+
+      // Ensure the correct answer is in the list
+      if (!choices.includes(transcription)) choices.unshift(transcription)
+
+      // If we still don't have 4 unique choices, pad with distinct fallbacks
+      const fallbacks = [
+        `(вариант А) ${transcription.split(' ').reverse().join(' ')}`,
+        `(вариант Б) ${transcription.slice(0, Math.ceil(transcription.length / 2))}...`,
+        `(вариант В) ...${transcription.slice(Math.floor(transcription.length / 2))}`,
+      ]
+      for (const fb of fallbacks) {
+        if (choices.length >= 4) break
+        if (!choices.includes(fb)) choices.push(fb)
+      }
+      choices = choices.slice(0, 4)
+
+      // Final shuffle
       choices = choices.sort(() => Math.random() - 0.5)
       return new Response(JSON.stringify({ choices }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
+
 
     // ─── Superpower: generate vision image ───────────────────────────────────
     if (action === 'generate_vision') {
