@@ -14,6 +14,7 @@ import { useToast } from '../components/Toast'
 import { playNotification } from '../lib/sounds'
 import { launchConfetti } from '../lib/confetti'
 import { hapticLight, hapticHeavy, hapticSuccess, hapticError } from '../lib/haptic'
+import { SUPERPOWERS, SUPERPOWER_MAP, supportsPlaybackRate } from '../lib/superpowers'
 
 // AI Thinking quips — rotated every 2.5s during scoring
 const AI_QUIPS = [
@@ -271,6 +272,20 @@ export default function Game() {
   const [rematchRequested, setRematchRequested] = useState(false) // did I click rematch?
   const [rematchPending, setRematchPending]     = useState(false) // did the other player click?
 
+  // ─── Superpower state ─────────────────────────────────────────────────────
+  // usedPowers: how many times each power was used THIS game (guest's tracker)
+  const [usedPowers, setUsedPowers] = useState({ slow: 0, choices: 0, vision: 0 })
+  // maxPowers: limits set by host (from room row)
+  const [maxPowers, setMaxPowers]   = useState({ slow: 1, choices: 1, vision: 1 })
+  // activation state
+  const [slowMoActive, setSlowMoActive]         = useState(false)
+  const [choicesOptions, setChoicesOptions]     = useState(null)   // string[] | null
+  const [choicesLoading, setChoicesLoading]     = useState(false)
+  const [visionImage, setVisionImage]           = useState(null)   // base64 data URL | null
+  const [visionLoading, setVisionLoading]       = useState(false)
+  const [slowMoSupported]                       = useState(() => supportsPlaybackRate())
+  // ─────────────────────────────────────────────────────────────────────────
+
   // AI quip cycling during scoring phase
   const [aiQuipIdx, setAiQuipIdx] = useState(0)
   useEffect(() => {
@@ -327,11 +342,18 @@ export default function Game() {
     }
   }, [room, isHost, isGuest, joinRoom])
 
-  // Sync totalRounds from room
+  // Sync totalRounds + superpower limits from room
   useEffect(() => {
     if (room?.total_rounds) setTotalRounds(room.total_rounds)
     if (room?.current_round) setCurrentRound(room.current_round)
-  }, [room?.total_rounds, room?.current_round])
+    if (room) {
+      setMaxPowers({
+        slow:    room.sp_slow_max    ?? 1,
+        choices: room.sp_choices_max ?? 1,
+        vision:  room.sp_vision_max  ?? 1,
+      })
+    }
+  }, [room?.total_rounds, room?.current_round, room?.sp_slow_max, room?.sp_choices_max, room?.sp_vision_max])
 
   // Detect guest joined → move host to READY phase
   useEffect(() => {
@@ -485,6 +507,10 @@ export default function Game() {
         setGuestGuessText(''); setManualScore(null)
         setHasListened(false); setUploadTimedOut(false)
         audio.setAudioBlob?.(null); audio.setReversedBlob?.(null)
+        // Reset per-round superpower UI
+        setSlowMoActive(false)
+        setChoicesOptions(null)
+        setVisionImage(null)
         setPhase(PHASES.HOST_RECORD)
         playNotification('turnStart')
         break
@@ -571,6 +597,9 @@ export default function Game() {
       setScore(null); setComment(''); setBreakdown(null)
       setActualTranscription(null); setAttemptTranscription(null)
       setGuestGuessText(''); setManualScore(null)
+      setSlowMoActive(false)
+      setChoicesOptions(null)
+      setVisionImage(null)
       setHasListened(false); setUploadTimedOut(false)
       audio.setAudioBlob?.(null); audio.setReversedBlob?.(null)
       broadcastState(GAME_EVENTS.NEXT_ROUND, { nextRound })
@@ -609,6 +638,81 @@ export default function Game() {
       onComplete()
     }, 3000)
   }, [])
+
+  // ─── Superpower handlers ──────────────────────────────────────────────────
+  const { VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY } = import.meta.env
+
+  const activateSlowMo = useCallback(() => {
+    if (!slowMoSupported) {
+      toast.error('⚠️ Ваше устройство не поддерживает Slow Mo. Обновите браузер или устройство.')
+      return
+    }
+    if (slowMoActive) {
+      // toggle off — restore normal speed
+      setSlowMoActive(false)
+      audio.setPlaybackRate(1.0)
+    } else {
+      if (usedPowers.slow >= maxPowers.slow) { toast.error('Зарядов Slow Mo не осталось'); return }
+      setSlowMoActive(true)
+      setUsedPowers(p => ({ ...p, slow: p.slow + 1 }))
+      audio.setPlaybackRate(0.5)
+      hapticLight()
+      toast.success('🐢 Slow Mo включён!')
+    }
+  }, [slowMoSupported, slowMoActive, usedPowers.slow, maxPowers.slow, audio, toast])
+
+  const activateChoices = useCallback(async () => {
+    if (usedPowers.choices >= maxPowers.choices) { toast.error('Зарядов AI Choices не осталось'); return }
+    if (choicesLoading || choicesOptions) return
+    if (!actualTranscription) { toast.error('Транскрипция ещё не готова, подожди...'); return }
+    setChoicesLoading(true)
+    setUsedPowers(p => ({ ...p, choices: p.choices + 1 }))
+    try {
+      const fnUrl = `${VITE_SUPABASE_URL}/functions/v1/gemini-scoring`
+      const res = await fetch(fnUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': VITE_SUPABASE_ANON_KEY },
+        body: JSON.stringify({ action: 'generate_choices', transcription: actualTranscription, language: room?.game_language || 'ru' }),
+      })
+      const data = await res.json()
+      if (!data.choices?.length) throw new Error('No choices returned')
+      setChoicesOptions(data.choices)
+      hapticLight()
+      toast.success('🎯 AI предложил варианты!')
+    } catch (e) {
+      toast.error(`AI Choices: ${e.message}`)
+      setUsedPowers(p => ({ ...p, choices: Math.max(0, p.choices - 1) })) // refund on error
+    } finally {
+      setChoicesLoading(false)
+    }
+  }, [usedPowers.choices, maxPowers.choices, choicesLoading, choicesOptions, actualTranscription, room?.game_language, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, toast])
+
+  const activateVision = useCallback(async () => {
+    if (usedPowers.vision >= maxPowers.vision) { toast.error('Зарядов AI Vision не осталось'); return }
+    if (visionLoading || visionImage) return
+    if (!actualTranscription) { toast.error('Транскрипция ещё не готова, подожди...'); return }
+    setVisionLoading(true)
+    setUsedPowers(p => ({ ...p, vision: p.vision + 1 }))
+    try {
+      const fnUrl = `${VITE_SUPABASE_URL}/functions/v1/gemini-scoring`
+      const res = await fetch(fnUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': VITE_SUPABASE_ANON_KEY },
+        body: JSON.stringify({ action: 'generate_vision', transcription: actualTranscription, language: room?.game_language || 'ru' }),
+      })
+      const data = await res.json()
+      if (!data.imageBase64) throw new Error('No image returned')
+      setVisionImage(`data:${data.mimeType};base64,${data.imageBase64}`)
+      hapticSuccess()
+      toast.success('🎨 AI Vision готов!')
+    } catch (e) {
+      toast.error(`AI Vision: ${e.message}`)
+      setUsedPowers(p => ({ ...p, vision: Math.max(0, p.vision - 1) })) // refund on error
+    } finally {
+      setVisionLoading(false)
+    }
+  }, [usedPowers.vision, maxPowers.vision, visionLoading, visionImage, actualTranscription, room?.game_language, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, toast])
+  // ─────────────────────────────────────────────────────────────────────────
 
   const activeHandlerRef = useRef(null)
   const wasRecordingRef = useRef(false)
@@ -1441,6 +1545,32 @@ export default function Game() {
                   🗣️ Начать повтор
                 </ActionButton>
               </div>
+              {/* Slow Mo in GUEST_LISTEN */}
+              {maxPowers.slow > 0 && (
+                <div style={{ marginTop: '12px' }}>
+                  <button
+                    onClick={activateSlowMo}
+                    disabled={!audio.isPlaying && !slowMoActive}
+                    style={{
+                      padding: '10px 20px', borderRadius: '14px', border: 'none', cursor: 'pointer',
+                      background: slowMoActive
+                        ? 'linear-gradient(135deg, #059669, #10B981)'
+                        : usedPowers.slow >= maxPowers.slow
+                          ? 'rgba(255,255,255,0.04)'
+                          : 'rgba(16,185,129,0.15)',
+                      color: usedPowers.slow >= maxPowers.slow ? 'rgba(255,255,255,0.2)' : '#10B981',
+                      fontWeight: 700, fontSize: '13px',
+                      boxShadow: slowMoActive ? '0 0 20px rgba(16,185,129,0.4)' : 'none',
+                      transition: 'all 0.2s', display: 'inline-flex', alignItems: 'center', gap: '8px',
+                      border: `1px solid ${usedPowers.slow >= maxPowers.slow ? 'rgba(255,255,255,0.06)' : 'rgba(16,185,129,0.3)'}`,
+                    }}
+                  >
+                    🐢 {slowMoActive ? 'Slow Mo ВКЛ — выключить' : 'Slow Mo'}
+                    <span style={{ fontSize: '11px', opacity: 0.7 }}>{maxPowers.slow - usedPowers.slow}/{maxPowers.slow}</span>
+                  </button>
+                  {!slowMoSupported && <p style={{ fontSize: '11px', color: '#EF4444', marginTop: '6px' }}>⚠️ Недоступно на вашем устройстве</p>}
+                </div>
+              )}
               {!hasListened && (
                 <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', margin: '4px 0 0' }}>
                   ⚠️ Сначала послушайте реверс
@@ -1475,7 +1605,95 @@ export default function Game() {
               <ActionButton onClick={handlePlayMimicReversed} disabled={audio.isPlaying || uploading} variant="cyan">
                 🔊 Послушать свой реверс
               </ActionButton>
-              <div style={{ marginTop: '10px' }}>
+
+              {/* ⚡ Superpower bar */}
+              {(maxPowers.choices > 0 || maxPowers.vision > 0) && (
+                <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                  {/* AI Choices */}
+                  {maxPowers.choices > 0 && (
+                    <button
+                      onClick={activateChoices}
+                      disabled={choicesLoading || !!choicesOptions || usedPowers.choices >= maxPowers.choices}
+                      style={{
+                        padding: '10px 18px', borderRadius: '14px', border: 'none', cursor: 'pointer',
+                        background: choicesOptions
+                          ? 'rgba(245,158,11,0.08)'
+                          : usedPowers.choices >= maxPowers.choices
+                            ? 'rgba(255,255,255,0.04)'
+                            : 'rgba(245,158,11,0.15)',
+                        color: usedPowers.choices >= maxPowers.choices ? 'rgba(255,255,255,0.2)' : '#F59E0B',
+                        fontWeight: 700, fontSize: '13px',
+                        border: `1px solid ${usedPowers.choices >= maxPowers.choices ? 'rgba(255,255,255,0.06)' : 'rgba(245,158,11,0.3)'}`,
+                        transition: 'all 0.2s', display: 'inline-flex', alignItems: 'center', gap: '8px',
+                        opacity: choicesLoading ? 0.7 : 1,
+                      }}
+                    >
+                      {choicesLoading ? <BtnSpinner size={14} /> : '🎯'}
+                      {choicesOptions ? 'Варианты показаны' : 'AI Choices'}
+                      <span style={{ fontSize: '11px', opacity: 0.7 }}>{maxPowers.choices - usedPowers.choices}/{maxPowers.choices}</span>
+                    </button>
+                  )}
+                  {/* AI Vision */}
+                  {maxPowers.vision > 0 && (
+                    <button
+                      onClick={activateVision}
+                      disabled={visionLoading || !!visionImage || usedPowers.vision >= maxPowers.vision}
+                      style={{
+                        padding: '10px 18px', borderRadius: '14px', border: 'none', cursor: 'pointer',
+                        background: visionImage
+                          ? 'rgba(167,139,250,0.08)'
+                          : usedPowers.vision >= maxPowers.vision
+                            ? 'rgba(255,255,255,0.04)'
+                            : 'rgba(167,139,250,0.15)',
+                        color: usedPowers.vision >= maxPowers.vision ? 'rgba(255,255,255,0.2)' : '#A78BFA',
+                        fontWeight: 700, fontSize: '13px',
+                        border: `1px solid ${usedPowers.vision >= maxPowers.vision ? 'rgba(255,255,255,0.06)' : 'rgba(167,139,250,0.3)'}`,
+                        transition: 'all 0.2s', display: 'inline-flex', alignItems: 'center', gap: '8px',
+                        opacity: visionLoading ? 0.7 : 1,
+                      }}
+                    >
+                      {visionLoading ? <BtnSpinner size={14} /> : '🎨'}
+                      {visionImage ? 'Vision готов' : 'AI Vision'}
+                      <span style={{ fontSize: '11px', opacity: 0.7 }}>{maxPowers.vision - usedPowers.vision}/{maxPowers.vision}</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* AI Choices options UI */}
+              {choicesOptions && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <p style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', textAlign: 'left', margin: 0 }}>🎯 Выбери правильный вариант:</p>
+                  {choicesOptions.map((opt, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setGuestGuessText(opt)}
+                      style={{
+                        padding: '12px 16px', borderRadius: '12px', border: 'none', textAlign: 'left',
+                        background: guestGuessText === opt
+                          ? 'linear-gradient(135deg, rgba(245,158,11,0.3), rgba(245,158,11,0.15))'
+                          : 'rgba(245,158,11,0.07)',
+                        color: 'white', fontWeight: guestGuessText === opt ? 700 : 500, fontSize: '14px',
+                        cursor: 'pointer', transition: 'all 0.15s',
+                        border: guestGuessText === opt ? '1px solid rgba(245,158,11,0.5)' : '1px solid rgba(245,158,11,0.15)',
+                        boxShadow: guestGuessText === opt ? '0 0 12px rgba(245,158,11,0.2)' : 'none',
+                      }}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* AI Vision image */}
+              {visionImage && (
+                <div style={{ borderRadius: '16px', overflow: 'hidden', border: '1px solid rgba(167,139,250,0.3)', boxShadow: '0 0 24px rgba(167,139,250,0.2)' }}>
+                  <img src={visionImage} alt="AI Vision" style={{ width: '100%', display: 'block' }} />
+                  <div style={{ background: 'rgba(167,139,250,0.08)', padding: '8px', textAlign: 'center', fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>🎨 AI Visual Hint</div>
+                </div>
+              )}
+
+              <div style={{ marginTop: '4px' }}>
                 <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)', marginBottom: '8px' }}>
                   Что изначально сказал(а) {(currentRound % 2 === 1 ? hostProfile : guestProfile)?.username || 'записывающий'}?
                 </p>

@@ -7,6 +7,7 @@ import { useAsyncButton } from '../hooks/useAsyncButton'
 import { useToast } from '../components/Toast'
 import { BtnSpinner } from '../components/BtnSpinner'
 import { LANGUAGES, DEFAULT_LANGUAGE_ID } from '../lib/languages'
+import { SUPERPOWERS } from '../lib/superpowers'
 
 export default function Lobby() {
   const { user, profile } = useAuth()
@@ -17,6 +18,8 @@ export default function Lobby() {
   const [showRoundPicker, setShowRoundPicker] = useState(false)
   const [pendingRounds, setPendingRounds] = useState(null)
   const [selectedLang, setSelectedLang] = useState(DEFAULT_LANGUAGE_ID)
+  // Superpower caps: { slow: 1, choices: 1, vision: 1 }
+  const [spConfig, setSpConfig] = useState({ slow: 1, choices: 1, vision: 1 })
   const navigate = useNavigate()
   const toast = useToast()
 
@@ -55,7 +58,14 @@ export default function Lobby() {
     try {
       const { data, error } = await supabase
         .from('rooms')
-        .insert({ host_id: user.id, total_rounds: totalRounds, game_language: selectedLang })
+        .insert({
+          host_id: user.id,
+          total_rounds: totalRounds,
+          game_language: selectedLang,
+          sp_slow_max:    spConfig.slow,
+          sp_choices_max: spConfig.choices,
+          sp_vision_max:  spConfig.vision,
+        })
         .select()
         .single()
       if (error) throw error
@@ -69,7 +79,7 @@ export default function Lobby() {
       setPendingRounds(null)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, navigate, selectedLang])
+  }, [user?.id, navigate, selectedLang, spConfig])
 
   // useAsyncButton for the "+ Создать комнату" header button (opens picker)
   const openPickerBtn = useAsyncButton(() => {
@@ -396,6 +406,38 @@ export default function Lobby() {
                   <span style={{ fontSize: '18px' }}>{lang.flag}</span>
                   {lang.nativeName}
                 </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Superpower config */}
+          <div style={{ marginBottom: '24px', textAlign: 'left' }}>
+            <p style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'rgba(255,255,255,0.35)', margin: '0 0 12px' }}>
+              ⚡ Супер Силы (зарядов на игру)
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {SUPERPOWERS.map(sp => (
+                <div key={sp.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '14px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                  <span style={{ fontSize: '20px', flexShrink: 0 }}>{sp.icon}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: 'white' }}>{sp.name}</div>
+                    <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sp.shortDesc}</div>
+                  </div>
+                  {/* Counter buttons */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                    <button
+                      onClick={() => setSpConfig(p => ({ ...p, [sp.id]: Math.max(0, p[sp.id] - 1) }))}
+                      style={{ width: '28px', height: '28px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,0.08)', color: 'white', fontSize: '16px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+                    >−</button>
+                    <span style={{ width: '24px', textAlign: 'center', fontSize: '16px', fontWeight: 800,
+                      color: spConfig[sp.id] === 0 ? 'rgba(255,255,255,0.2)' : sp.color
+                    }}>{spConfig[sp.id]}</span>
+                    <button
+                      onClick={() => setSpConfig(p => ({ ...p, [sp.id]: Math.min(3, p[sp.id] + 1) }))}
+                      style={{ width: '28px', height: '28px', borderRadius: '8px', border: 'none', background: 'rgba(255,255,255,0.08)', color: 'white', fontSize: '16px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 }}
+                    >+</button>
+                  </div>
+                </div>
               ))}
             </div>
           </div>
