@@ -1,5 +1,5 @@
 steps:
-  # ── Step 1: Determine service name from branch ──────────────
+  # ── Step 1: Determine env file + service from branch ────────
   - name: 'gcr.io/cloud-builders/docker'
     id: 'build'
     entrypoint: 'bash'
@@ -18,21 +18,14 @@ steps:
           SERVICE="zvoo-dev"
         fi
 
-        echo "Building $$SERVICE from $$ENV_FILE (branch: $$BRANCH_NAME)"
+        echo "Building $$SERVICE using $$ENV_FILE (branch: $$BRANCH_NAME)"
 
-        # Read .env file → --build-arg flags
-        BUILD_ARGS=""
-        while IFS='=' read -r key value; do
-          [ -z "$$key" ] || [[ "$$key" == \#* ]] && continue
-          BUILD_ARGS="$$BUILD_ARGS --build-arg $$key=$$value"
-        done < "$$ENV_FILE"
-
-        docker build $$BUILD_ARGS \
+        docker build \
+          --build-arg ENV_FILE=$$ENV_FILE \
           -t gcr.io/$PROJECT_ID/$$SERVICE:$COMMIT_SHA \
           -t gcr.io/$PROJECT_ID/$$SERVICE:latest \
           .
 
-        # Save service name for next steps
         echo "$$SERVICE" > /workspace/_service_name
 
   # ── Step 2: Push image ──────────────────────────────────────
@@ -68,8 +61,3 @@ steps:
 
 options:
   logging: CLOUD_LOGGING_ONLY
-
-images:
-  - 'gcr.io/$PROJECT_ID/zvoo-dev'
-  - 'gcr.io/$PROJECT_ID/zvoo-stage'
-  - 'gcr.io/$PROJECT_ID/zvoo-prod'

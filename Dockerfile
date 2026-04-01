@@ -9,13 +9,12 @@ RUN npm ci --legacy-peer-deps
 # Copy source
 COPY . .
 
-# Accept env vars as build args (Vite bakes them at build time)
-ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_ANON_KEY
-ARG VITE_GEMINI_API_KEY
-ARG VITE_ADMIN_EMAILS
+# Use the per-environment .env file if present (Cloud Build sets ENV_FILE build arg)
+# Default to .env.dev for direct MCP deploys
+ARG ENV_FILE=.env.dev
+RUN cp ${ENV_FILE} .env
 
-# Build the static SPA
+# Build the static SPA — Vite reads .env automatically
 RUN npm run build
 
 # ── Stage 2: Serve with Nginx ──────────────────────────────
