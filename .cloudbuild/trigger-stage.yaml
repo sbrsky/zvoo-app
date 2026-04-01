@@ -1,0 +1,8 @@
+name: zvoo-stage-trigger
+description: "Deploy zvoo-stage on push to stage branch"
+github:
+  owner: sbrsky
+  name: zvoo-app
+  push:
+    branch: "^stage$"
+filename: cloudbuild.yaml

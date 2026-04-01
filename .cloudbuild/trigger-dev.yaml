@@ -1,0 +1,8 @@
+name: zvoo-dev-trigger
+description: "Deploy zvoo-dev on push to dev branch"
+github:
+  owner: sbrsky
+  name: zvoo-app
+  push:
+    branch: "^dev$"
+filename: cloudbuild.yaml
