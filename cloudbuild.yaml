@@ -1,34 +1,39 @@
 steps:
-  # ── Step 1: Determine env file + service from branch ────────
+  # ── Build: inject secrets as Docker build args ───────────────
   - name: 'gcr.io/cloud-builders/docker'
     id: 'build'
     entrypoint: 'bash'
+    secretEnv:
+      - 'VITE_SUPABASE_URL'
+      - 'VITE_SUPABASE_ANON_KEY'
+      - 'VITE_GEMINI_API_KEY'
+      - 'VITE_ADMIN_EMAILS'
     args:
       - '-c'
       - |
-        # Map branch → env file + service name
+        # Map branch → Cloud Run service name
         if [ "$$BRANCH_NAME" = "main" ]; then
-          ENV_FILE=".env.prod"
           SERVICE="zvoo-prod"
         elif [ "$$BRANCH_NAME" = "stage" ]; then
-          ENV_FILE=".env.stage"
           SERVICE="zvoo-stage"
         else
-          ENV_FILE=".env.dev"
           SERVICE="zvoo-dev"
         fi
 
-        echo "Building $$SERVICE using $$ENV_FILE (branch: $$BRANCH_NAME)"
+        echo "Building $$SERVICE (branch: $$BRANCH_NAME)"
 
         docker build \
-          --build-arg ENV_FILE=$$ENV_FILE \
+          --build-arg VITE_SUPABASE_URL="$$VITE_SUPABASE_URL" \
+          --build-arg VITE_SUPABASE_ANON_KEY="$$VITE_SUPABASE_ANON_KEY" \
+          --build-arg VITE_GEMINI_API_KEY="$$VITE_GEMINI_API_KEY" \
+          --build-arg VITE_ADMIN_EMAILS="$$VITE_ADMIN_EMAILS" \
           -t gcr.io/$PROJECT_ID/$$SERVICE:$COMMIT_SHA \
           -t gcr.io/$PROJECT_ID/$$SERVICE:latest \
           .
 
         echo "$$SERVICE" > /workspace/_service_name
 
-  # ── Step 2: Push image ──────────────────────────────────────
+  # ── Push image to Container Registry ────────────────────────
   - name: 'gcr.io/cloud-builders/docker'
     id: 'push'
     entrypoint: 'bash'
@@ -39,7 +44,7 @@ steps:
         docker push gcr.io/$PROJECT_ID/$$SERVICE:$COMMIT_SHA
         docker push gcr.io/$PROJECT_ID/$$SERVICE:latest
 
-  # ── Step 3: Deploy to Cloud Run ─────────────────────────────
+  # ── Deploy to Cloud Run ──────────────────────────────────────
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'deploy'
     entrypoint: 'bash'
@@ -58,6 +63,19 @@ steps:
           --min-instances 0 \
           --max-instances 3 \
           --quiet
+
+# ── Secrets pulled from Google Secret Manager ────────────────
+# Secrets are NEVER in git — they live in Secret Manager only
+availableSecrets:
+  secretManager:
+    - versionName: projects/977321562666/secrets/ZVOO_SUPABASE_URL/versions/latest
+      env: 'VITE_SUPABASE_URL'
+    - versionName: projects/977321562666/secrets/ZVOO_SUPABASE_ANON_KEY/versions/latest
+      env: 'VITE_SUPABASE_ANON_KEY'
+    - versionName: projects/977321562666/secrets/ZVOO_GEMINI_API_KEY/versions/latest
+      env: 'VITE_GEMINI_API_KEY'
+    - versionName: projects/977321562666/secrets/ZVOO_ADMIN_EMAILS/versions/latest
+      env: 'VITE_ADMIN_EMAILS'
 
 options:
   logging: CLOUD_LOGGING_ONLY

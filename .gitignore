@@ -11,10 +11,9 @@ node_modules
 dist
 dist-ssr
 *.local
+# All .env files are gitignored — secrets live in Google Secret Manager
 .env
-!.env.dev
-!.env.stage
-!.env.prod
+.env.*
 
 # Editor directories and files
 .vscode/*
