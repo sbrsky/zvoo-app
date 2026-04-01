@@ -1,0 +1,11 @@
+node_modules
+.git
+.env
+dist
+*.md
+.DS_Store
+.vscode
+.idea
+test-*.mjs
+test-*.js
+supabase/.temp

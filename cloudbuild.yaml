@@ -1,0 +1,75 @@
+steps:
+  # ── Step 1: Determine service name from branch ──────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Map branch → env file + service name
+        if [ "$$BRANCH_NAME" = "main" ]; then
+          ENV_FILE=".env.prod"
+          SERVICE="zvoo-prod"
+        elif [ "$$BRANCH_NAME" = "stage" ]; then
+          ENV_FILE=".env.stage"
+          SERVICE="zvoo-stage"
+        else
+          ENV_FILE=".env.dev"
+          SERVICE="zvoo-dev"
+        fi
+
+        echo "Building $$SERVICE from $$ENV_FILE (branch: $$BRANCH_NAME)"
+
+        # Read .env file → --build-arg flags
+        BUILD_ARGS=""
+        while IFS='=' read -r key value; do
+          [ -z "$$key" ] || [[ "$$key" == \#* ]] && continue
+          BUILD_ARGS="$$BUILD_ARGS --build-arg $$key=$$value"
+        done < "$$ENV_FILE"
+
+        docker build $$BUILD_ARGS \
+          -t gcr.io/$PROJECT_ID/$$SERVICE:$COMMIT_SHA \
+          -t gcr.io/$PROJECT_ID/$$SERVICE:latest \
+          .
+
+        # Save service name for next steps
+        echo "$$SERVICE" > /workspace/_service_name
+
+  # ── Step 2: Push image ──────────────────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        SERVICE=$(cat /workspace/_service_name)
+        docker push gcr.io/$PROJECT_ID/$$SERVICE:$COMMIT_SHA
+        docker push gcr.io/$PROJECT_ID/$$SERVICE:latest
+
+  # ── Step 3: Deploy to Cloud Run ─────────────────────────────
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        SERVICE=$(cat /workspace/_service_name)
+        gcloud run deploy $$SERVICE \
+          --image gcr.io/$PROJECT_ID/$$SERVICE:$COMMIT_SHA \
+          --region europe-west1 \
+          --platform managed \
+          --allow-unauthenticated \
+          --port 8080 \
+          --memory 256Mi \
+          --cpu 1 \
+          --min-instances 0 \
+          --max-instances 3 \
+          --quiet
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+images:
+  - 'gcr.io/$PROJECT_ID/zvoo-dev'
+  - 'gcr.io/$PROJECT_ID/zvoo-stage'
+  - 'gcr.io/$PROJECT_ID/zvoo-prod'
