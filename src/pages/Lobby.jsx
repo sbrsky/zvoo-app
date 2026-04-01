@@ -11,6 +11,18 @@ import { SUPERPOWERS } from '../lib/superpowers'
 import { UserProfileDrawer } from '../components/UserProfileDrawer'
 import { GAME_TYPES, IMAGINARIUM_STYLES } from '../lib/constants'
 
+// ── Module-level debug helpers — always reflect current localStorage ──
+function isDebug() {
+  return typeof window !== 'undefined' && (
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1' ||
+    localStorage.getItem('ZVOO_DEBUG') === 'true'
+  )
+}
+const devLog   = (...a) => { if (isDebug()) console.log('[Lobby]', ...a) }
+const devWarn  = (...a) => { if (isDebug()) console.warn('[Lobby]', ...a) }
+const devError = (...a) => { if (isDebug()) console.error('[Lobby]', ...a) }
+
 export default function Lobby() {
   const { user, profile } = useAuth()
   const { onlineUsers } = usePresence('lobby', { id: user?.id, username: profile?.username, avatar_url: profile?.avatar_url })
@@ -46,15 +58,6 @@ export default function Lobby() {
       navigate('/onboarding')
     }
   }, [profile, navigate])
-
-  // ── Dev-only detailed logging (localhost or force debug) ──
-  const IS_DEV = typeof window !== 'undefined' && (
-    window.location.hostname === 'localhost' || 
-    localStorage.getItem('ZVOO_DEBUG') === 'true'
-  )
-  const devLog = IS_DEV ? console.log.bind(console, '[Lobby]') : () => {}
-  const devWarn = IS_DEV ? console.warn.bind(console, '[Lobby]') : () => {}
-  const devError = IS_DEV ? console.error.bind(console, '[Lobby]') : () => {}
 
   // ── stable refs so closures never go stale ──
   const userRef = useRef(user)

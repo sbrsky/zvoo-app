@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useRef } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 const AuthContext = createContext({})
@@ -9,25 +9,60 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
-      if (session?.user) fetchProfile(session.user.id)
-      else setLoading(false)
-    })
+    // Safety-net: if auth never resolves (network down, timeout), unblock UI after 8s
+    const safetyTimer = setTimeout(() => {
+      console.warn('[useAuth] Safety timeout — forcing loading=false')
+      setLoading(false)
+    }, 8000)
+
+    supabase.auth.getSession()
+      .then(({ data: { session } }) => {
+        setUser(session?.user ?? null)
+        if (session?.user) {
+          fetchProfile(session.user.id)
+        } else {
+          clearTimeout(safetyTimer)
+          setLoading(false)
+        }
+      })
+      .catch((err) => {
+        console.error('[useAuth] getSession failed:', err.message)
+        clearTimeout(safetyTimer)
+        setLoading(false)
+      })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setUser(session?.user ?? null)
-      if (session?.user) await fetchProfile(session.user.id)
-      else { setProfile(null); setLoading(false) }
+      if (session?.user) {
+        await fetchProfile(session.user.id)
+      } else {
+        setProfile(null)
+        setLoading(false)
+      }
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      clearTimeout(safetyTimer)
+      subscription.unsubscribe()
+    }
   }, [])
 
   async function fetchProfile(userId) {
-    const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single()
-    if (!error && data) setProfile(data)
-    setLoading(false)
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single()
+      if (!error && data) setProfile(data)
+      else if (error) console.warn('[useAuth] fetchProfile error:', error.message)
+    } catch (err) {
+      // e.g. network timeout from fetchWithTimeout — must NOT leave loading=true
+      console.error('[useAuth] fetchProfile threw (network issue?):', err.message)
+    } finally {
+      // ALWAYS unblock the app, even on errors
+      setLoading(false)
+    }
   }
 
   async function signUp(email, password, username) {
@@ -55,7 +90,6 @@ export function AuthProvider({ children }) {
   }
 
   async function signOut() {
-    // Sign out from Supabase — onAuthStateChange will clear user/profile
     await supabase.auth.signOut()
   }
 
