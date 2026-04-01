@@ -47,8 +47,11 @@ export default function Lobby() {
     }
   }, [profile, navigate])
 
-  // ── Dev-only detailed logging (localhost only) ──
-  const IS_DEV = typeof window !== 'undefined' && window.location.hostname === 'localhost'
+  // ── Dev-only detailed logging (localhost or force debug) ──
+  const IS_DEV = typeof window !== 'undefined' && (
+    window.location.hostname === 'localhost' || 
+    localStorage.getItem('ZVOO_DEBUG') === 'true'
+  )
   const devLog = IS_DEV ? console.log.bind(console, '[Lobby]') : () => {}
   const devWarn = IS_DEV ? console.warn.bind(console, '[Lobby]') : () => {}
   const devError = IS_DEV ? console.error.bind(console, '[Lobby]') : () => {}
@@ -56,6 +59,7 @@ export default function Lobby() {
   // ── stable refs so closures never go stale ──
   const userRef = useRef(user)
   const fetchRoomsRef = useRef(null)
+  const fetchedUserIdRef = useRef(null)
   useEffect(() => { userRef.current = user }, [user])
 
   // Unique channel name per mount avoids Supabase client returning a stale/broken channel
@@ -63,6 +67,7 @@ export default function Lobby() {
 
   const fetchRooms = useCallback(async (manual = false) => {
     const currentUser = userRef.current
+    fetchedUserIdRef.current = currentUser?.id || null
     devLog(`fetchRooms called — manual=${manual}, user=${currentUser?.id ?? 'null'}`)
 
     if (manual) {
@@ -76,55 +81,68 @@ export default function Lobby() {
       }
     }
 
-    devLog('Fetching rooms from DB...')
-    const startTs = Date.now()
-    const { data, error } = await supabase
-      .from('rooms')
-      .select('*, host:profiles!rooms_host_id_fkey(*), guest:profiles!rooms_guest_id_fkey(*)')
-      .in('status', ['waiting', 'playing'])
-      .order('created_at', { ascending: false })
-    devLog(`DB response in ${Date.now() - startTs}ms — rooms=${data?.length ?? 'err'}, error=${error?.message ?? 'none'}`)
+    try {
+      devLog('Fetching rooms from DB...')
+      const startTs = Date.now()
+      const { data, error } = await supabase
+        .from('rooms')
+        .select('*, host:profiles!rooms_host_id_fkey(*), guest:profiles!rooms_guest_id_fkey(*)')
+        .in('status', ['waiting', 'playing'])
+        .order('created_at', { ascending: false })
+      devLog(`DB response in ${Date.now() - startTs}ms — rooms=${data?.length ?? 'err'}, error=${error?.message ?? 'none'}`)
 
-    if (error) {
-      devError('fetchRooms error:', error)
-      setFetchError(error.message)
-    } else {
+      if (error) throw error
+
       setFetchError(null)
       setRooms(data || [])
       devLog('setRooms called with', data?.length, 'rooms')
-    }
-    setLoading(false)
-    if (manual) setTimeout(() => setRefreshing(false), 400)
 
-    // Determine turn state for playing rooms current user is in
-    if (currentUser?.id && data?.length) {
-      const myPlayingRooms = data.filter(
-        r => r.status === 'playing' && (r.host_id === currentUser.id || r.guest_id === currentUser.id)
-      )
-      if (myPlayingRooms.length) {
-        const { data: sessions } = await supabase
-          .from('game_sessions')
-          .select('room_id, recorder_id, ai_score, round_number')
-          .in('room_id', myPlayingRooms.map(r => r.id))
-          .order('created_at', { ascending: false })
-        const map = {}
-        ;(sessions || []).forEach(s => {
-          if (!map[s.room_id]) map[s.room_id] = s
-        })
-        setSessionMap(map)
-        const turnSet = new Set()
-        Object.values(map).forEach(s => {
-          if (s.recorder_id && s.ai_score == null) turnSet.add(s.room_id)
-        })
-        setMyTurnRooms(turnSet)
-        devLog('myTurnRooms updated:', [...turnSet])
-      } else {
-        setMyTurnRooms(new Set())
-        setSessionMap({})
+      // Determine turn state for playing rooms current user is in
+      if (currentUser?.id && data?.length) {
+        const myPlayingRooms = data.filter(
+          r => r.status === 'playing' && (r.host_id === currentUser.id || r.guest_id === currentUser.id)
+        )
+        if (myPlayingRooms.length) {
+          const { data: sessions, error: sessionsErr } = await supabase
+            .from('game_sessions')
+            .select('room_id, recorder_id, ai_score, round_number')
+            .in('room_id', myPlayingRooms.map(r => r.id))
+            .order('created_at', { ascending: false })
+          if (sessionsErr) throw sessionsErr
+
+          const map = {}
+          ;(sessions || []).forEach(s => {
+            if (!map[s.room_id]) map[s.room_id] = s
+          })
+          setSessionMap(map)
+          const turnSet = new Set()
+          Object.values(map).forEach(s => {
+            if (s.recorder_id && s.ai_score == null) turnSet.add(s.room_id)
+          })
+          setMyTurnRooms(turnSet)
+          devLog('myTurnRooms updated:', [...turnSet])
+        } else {
+          setMyTurnRooms(new Set())
+          setSessionMap({})
+        }
       }
+    } catch (e) {
+      devError('Caught unhandled error in fetchRooms:', e)
+      setFetchError(e.message || 'Ошибка загрузки комнат')
+    } finally {
+      setLoading(false)
+      if (manual) setTimeout(() => setRefreshing(false), 400)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // empty deps — reads user via userRef to avoid stale-closure / useEffect re-runs
+
+  // Refetch if user transitions from null to logged in (fixes RLS race condition)
+  useEffect(() => {
+    if (user?.id && fetchedUserIdRef.current !== user.id) {
+      devLog('User auth detected — triggering fast refetch')
+      fetchRoomsRef.current?.()
+    }
+  }, [user?.id])
 
   // Keep ref in sync
   useEffect(() => { fetchRoomsRef.current = fetchRooms }, [fetchRooms])
@@ -198,6 +216,7 @@ export default function Lobby() {
       if (error) throw error
       setShowRoundPicker(false)
       setPickerStep(1)
+      fetchRoomsRef.current?.()
       toast.success('Комната создана! Ждём соперника...')
       navigate(`/game/${data.id}`)
     } catch (err) {
