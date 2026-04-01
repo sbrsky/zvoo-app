@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install deps first (Docker layer caching)
 COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts
+RUN npm ci --legacy-peer-deps
 
 # Copy source
 COPY . .
