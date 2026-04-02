@@ -9,21 +9,23 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // Safety-net: if auth never resolves (network down, timeout), unblock UI after 8s
+    // Safety-net: if auth never resolves (network down, Supabase unreachable), unblock UI after 5s
     const safetyTimer = setTimeout(() => {
-      console.warn('[useAuth] Safety timeout — forcing loading=false')
+      console.warn('[useAuth] Safety timeout 5s — forcing loading=false. Supabase getSession() may be hanging.')
       setLoading(false)
-    }, 8000)
+    }, 5000)
 
+    console.log('[useAuth] calling getSession()...')
     supabase.auth.getSession()
-      .then(({ data: { session } }) => {
+      .then(async ({ data: { session } }) => {
+        console.log('[useAuth] getSession() resolved, user=', session?.user?.id ?? 'null')
         setUser(session?.user ?? null)
         if (session?.user) {
-          fetchProfile(session.user.id)
+          await fetchProfile(session.user.id) // fetchProfile does setLoading(false) in finally
         } else {
-          clearTimeout(safetyTimer)
           setLoading(false)
         }
+        clearTimeout(safetyTimer)
       })
       .catch((err) => {
         console.error('[useAuth] getSession failed:', err.message)
@@ -32,6 +34,7 @@ export function AuthProvider({ children }) {
       })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      console.log('[useAuth] onAuthStateChange:', _event, session?.user?.id ?? 'null')
       setUser(session?.user ?? null)
       if (session?.user) {
         await fetchProfile(session.user.id)
@@ -46,6 +49,7 @@ export function AuthProvider({ children }) {
       subscription.unsubscribe()
     }
   }, [])
+
 
   async function fetchProfile(userId) {
     try {

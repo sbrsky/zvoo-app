@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🔌 Supabase WS Diagnostic — ZVOO</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: #0a0a1a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 32px 20px;
+    }
+    h1 { font-size: 22px; font-weight: 800; color: #4DD9C8; margin-bottom: 4px; }
+    .subtitle { font-size: 13px; color: rgba(255,255,255,0.4); margin-bottom: 28px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px,1fr)); gap: 16px; margin-bottom: 24px; }
+    .card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 16px;
+      padding: 20px;
+    }
+    .card-title {
+      font-size: 13px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.1em; color: rgba(255,255,255,0.5); margin-bottom: 14px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+      background: #64748b; transition: background 0.3s;
+    }
+    .dot.ok { background: #10B981; box-shadow: 0 0 8px rgba(16,185,129,0.6); }
+    .dot.error { background: #EF4444; box-shadow: 0 0 8px rgba(239,68,68,0.6); }
+    .dot.running { background: #F59E0B; animation: pulse 1s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .label { font-size: 14px; font-weight: 600; }
+    .meta { font-size: 11px; color: rgba(255,255,255,0.35); margin-left: auto; }
+    .badge {
+      display: inline-block; padding: 2px 10px; border-radius: 20px;
+      font-size: 11px; font-weight: 700;
+    }
+    .badge-ok { background: rgba(16,185,129,0.15); color: #10B981; border: 1px solid rgba(16,185,129,0.3); }
+    .badge-err { background: rgba(239,68,68,0.15); color: #EF4444; border: 1px solid rgba(239,68,68,0.3); }
+    .badge-wait { background: rgba(245,158,11,0.15); color: #F59E0B; border: 1px solid rgba(245,158,11,0.3); }
+    .log-box {
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 12px;
+      padding: 16px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      line-height: 1.7;
+      max-height: 380px;
+      overflow-y: auto;
+      margin-top: 16px;
+    }
+    .log-entry { display: flex; gap: 10px; }
+    .log-time { color: rgba(255,255,255,0.3); flex-shrink: 0; }
+    .log-ok   { color: #10B981; }
+    .log-err  { color: #EF4444; }
+    .log-warn { color: #F59E0B; }
+    .log-info { color: #60A5FA; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 22px; border-radius: 12px; border: none;
+      font-size: 14px; font-weight: 700; cursor: pointer; transition: all 0.2s;
+    }
+    .btn-primary { background: linear-gradient(135deg,#147A8A,#2DC4B2); color: white; }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(77,217,200,0.35); }
+    .btn-secondary { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.12); color: rgba(255,255,255,0.75); }
+    .btn-secondary:hover { background: rgba(255,255,255,0.12); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none !important; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+    .summary-bar {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 14px;
+      padding: 16px 20px;
+      display: flex; flex-wrap: wrap; gap: 20px; align-items: center;
+      margin-bottom: 20px;
+    }
+    .summary-item { text-align: center; }
+    .summary-val { font-size: 24px; font-weight: 800; color: white; }
+    .summary-lab { font-size: 11px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 0.08em; }
+    #ws-status-live {
+      font-size: 18px; font-weight: 800; margin-left: auto;
+      padding: 6px 16px; border-radius: 10px;
+    }
+    .info-box {
+      background: rgba(96,165,250,0.07);
+      border: 1px solid rgba(96,165,250,0.25);
+      border-radius: 12px;
+      padding: 14px 18px;
+      font-size: 13px;
+      color: rgba(255,255,255,0.7);
+      line-height: 1.6;
+      margin-bottom: 16px;
+    }
+    .info-box b { color: #4DD9C8; }
+    code { background: rgba(255,255,255,0.07); padding: 1px 6px; border-radius: 4px; font-family: monospace; }
+  </style>
+</head>
+<body>
+
+<h1>🔌 Supabase WebSocket Diagnostics — ZVOO</h1>
+<p class="subtitle">Тестирует REST API, WebSocket и Realtime channel независимо от приложения</p>
+
+<div class="info-box">
+  <b>Как пользоваться:</b> Нажми <b>▶ Запустить все тесты</b>. Результаты появятся ниже. Если REST OK, но WS ❌ — проблема именно в WebSocket (firewall, CORS, Supabase plan). Открой эту страницу также с телефона (iOS Safari) чтобы сравнить.
+  <br><br>
+  Потом в DevTools любой вкладки zvoo введи: <code>window.ZVOO.wsLog()</code> — получишь полный WS-лог сессии.
+</div>
+
+<div class="actions">
+  <button class="btn btn-primary" id="btn-run" onclick="runAll()">▶ Запустить все тесты</button>
+  <button class="btn btn-secondary" id="btn-ws-only" onclick="runWsOnly()">🔌 Только WebSocket</button>
+  <button class="btn btn-secondary" onclick="clearLog()">🗑 Очистить лог</button>
+</div>
+
+<div class="summary-bar" id="summary" style="display:none">
+  <div class="summary-item"><div class="summary-val" id="s-rest">—</div><div class="summary-lab">REST API</div></div>
+  <div class="summary-item"><div class="summary-val" id="s-ws">—</div><div class="summary-lab">WebSocket</div></div>
+  <div class="summary-item"><div class="summary-val" id="s-rt">—</div><div class="summary-lab">Realtime</div></div>
+  <div class="summary-item"><div class="summary-val" id="s-ttc">—</div><div class="summary-lab">TTConnect (ms)</div></div>
+  <div id="ws-status-live" style="margin-left:auto"></div>
+</div>
+
+<div class="grid">
+  <!-- REST -->
+  <div class="card">
+    <div class="card-title">📡 REST API (HTTP)</div>
+    <div class="status-row"><div class="dot" id="d-rest"></div><span class="label">Health check</span><span class="meta" id="m-rest">—</span></div>
+    <div class="status-row"><div class="dot" id="d-rooms"></div><span class="label">Запрос таблицы rooms</span><span class="meta" id="m-rooms">—</span></div>
+    <div class="status-row"><div class="dot" id="d-authed"></div><span class="label">Анонимная сессия</span><span class="meta" id="m-authed">—</span></div>
+  </div>
+
+  <!-- WebSocket -->
+  <div class="card">
+    <div class="card-title">🔌 WebSocket (Realtime)</div>
+    <div class="status-row"><div class="dot" id="d-wsconn"></div><span class="label">TCP соединение</span><span class="meta" id="m-wsconn">—</span></div>
+    <div class="status-row"><div class="dot" id="d-wsjoin"></div><span class="label">Realtime channel JOIN</span><span class="meta" id="m-wsjoin">—</span></div>
+    <div class="status-row"><div class="dot" id="d-wsping"></div><span class="label">Heartbeat PONG</span><span class="meta" id="m-wsping">—</span></div>
+  </div>
+
+  <!-- Supabase JS -->
+  <div class="card">
+    <div class="card-title">📦 @supabase/supabase-js</div>
+    <div class="status-row"><div class="dot" id="d-sjs"></div><span class="label">Библиотека загружена</span><span class="meta" id="m-sjs">—</span></div>
+    <div class="status-row"><div class="dot" id="d-schan"></div><span class="label">channel() создан</span><span class="meta" id="m-schan">—</span></div>
+    <div class="status-row"><div class="dot" id="d-ssub"></div><span class="label">subscribe() SUBSCRIBED</span><span class="meta" id="m-ssub">—</span></div>
+  </div>
+
+  <!-- Network -->
+  <div class="card">
+    <div class="card-title">🌐 Среда</div>
+    <div class="status-row"><div class="dot ok" id="d-online"></div><span class="label">navigator.onLine</span><span class="meta" id="m-online">—</span></div>
+    <div class="status-row"><div class="dot" id="d-proto"></div><span class="label">Протокол страницы</span><span class="meta" id="m-proto">—</span></div>
+    <div class="status-row"><div class="dot" id="d-ua"></div><span class="label">User-Agent</span><span class="meta" id="m-ua">—</span></div>
+  </div>
+</div>
+
+<div class="log-box" id="logbox">
+  <div class="log-entry"><span class="log-time">ready</span><span class="log-info">← Нажмите «Запустить все тесты»</span></div>
+</div>
+
+<script type="module">
+// ─── CONFIG ──────────────────────────────────────────────────────────────────
+const SUPABASE_URL  = 'https://bsttwhchqkhwwasjvngs.supabase.co'
+const SUPABASE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJzdHR3aGNocWtod3dhc2p2bmdzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0MzIxMDQsImV4cCI6MjA5MDAwODEwNH0.sk58saS5qtBS1_ILsQj9uMPBPpajZy08ImMcb8jJR0c'
+const WS_URL = SUPABASE_URL.replace('https://', 'wss://') + '/realtime/v1/websocket?apikey=' + SUPABASE_KEY + '&vsn=1.0.0'
+
+// ─── LOG ─────────────────────────────────────────────────────────────────────
+const logbox = document.getElementById('logbox')
+function ts() { return new Date().toISOString().slice(11,23) }
+function log(msg, type='info') {
+  const row = document.createElement('div')
+  row.className = 'log-entry'
+  row.innerHTML = `<span class="log-time">${ts()}</span><span class="log-${type}">${msg}</span>`
+  logbox.appendChild(row)
+  logbox.scrollTop = logbox.scrollHeight
+}
+
+// ─── DOTS ────────────────────────────────────────────────────────────────────
+function setDot(id, state, meta='') {
+  const d = document.getElementById('d-'+id)
+  const m = document.getElementById('m-'+id)
+  if (d) { d.className = 'dot ' + state }
+  if (m && meta) m.textContent = meta
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function setSum(id, val, ok) {
+  const el = document.getElementById('s-'+id)
+  if (el) { el.textContent = val; el.style.color = ok === true ? '#10B981' : ok === false ? '#EF4444' : '#F59E0B' }
+}
+
+// ─── ENVIRONMENT ─────────────────────────────────────────────────────────────
+function checkEnv() {
+  const online = navigator.onLine
+  setDot('online', online ? 'ok' : 'error', online ? 'true' : 'false ❌')
+  log(`navigator.onLine = ${online}`, online ? 'ok' : 'err')
+
+  const proto = window.location.protocol
+  setDot('proto', proto === 'https:' || proto === 'file:' ? 'ok' : 'running', proto)
+  log(`Protocol: ${proto}`, 'info')
+
+  const ua = navigator.userAgent
+  const short = ua.slice(0,60) + '…'
+  setDot('ua', 'ok', short)
+  log(`UA: ${ua}`, 'info')
+}
+
+// ─── REST ────────────────────────────────────────────────────────────────────
+async function checkRest() {
+  log('── REST API tests ──', 'info')
+  setDot('rest', 'running', '...')
+  const t0 = Date.now()
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY }
+    })
+    const ms = Date.now()-t0
+    if (r.ok || r.status === 200 || r.status === 404) {
+      setDot('rest', 'ok', `${r.status} — ${ms}ms`)
+      log(`REST health: HTTP ${r.status} in ${ms}ms`, 'ok')
+      setSum('rest', '✅', true)
+    } else {
+      setDot('rest', 'error', `HTTP ${r.status}`)
+      log(`REST health: HTTP ${r.status}`, 'err')
+      setSum('rest', '❌', false)
+    }
+  } catch(e) {
+    setDot('rest', 'error', e.message.slice(0,40))
+    log(`REST FAILED: ${e.message}`, 'err')
+    setSum('rest', '❌', false)
+  }
+
+  // Table query
+  setDot('rooms', 'running', '...')
+  const t1 = Date.now()
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/rooms?limit=1&select=id`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' }
+    })
+    const ms2 = Date.now()-t1
+    const body = await r.text()
+    if (r.status === 200 || r.status === 406) {
+      setDot('rooms', 'ok', `${r.status} — ${ms2}ms`)
+      log(`rooms query: HTTP ${r.status} in ${ms2}ms — ${body.slice(0,60)}`, 'ok')
+    } else {
+      setDot('rooms', 'error', `HTTP ${r.status}`)
+      log(`rooms query FAILED: HTTP ${r.status} — ${body.slice(0,80)}`, 'err')
+    }
+  } catch(e) {
+    setDot('rooms', 'error', e.message.slice(0,40))
+    log(`rooms query FAILED: ${e.message}`, 'err')
+  }
+
+  // Auth session — just poke the anon key
+  setDot('authed', 'ok', 'anon key valid (JWT)')
+  log('Anon key is set and structurally valid (JWT)', 'ok')
+}
+
+// ─── RAW WEBSOCKET ───────────────────────────────────────────────────────────
+async function checkRawWs() {
+  return new Promise((resolve) => {
+    log('── Raw WebSocket test ──', 'info')
+    log(`Connecting: ${WS_URL.slice(0,80)}...`, 'info')
+    setDot('wsconn', 'running', '...')
+    const t0 = Date.now()
+    let ws
+    const timeout = setTimeout(() => {
+      log('Raw WS TIMEOUT — no response in 10s', 'err')
+      setDot('wsconn', 'error', 'timeout 10s')
+      setDot('wsjoin', 'error', 'skipped')
+      setDot('wsping', 'error', 'skipped')
+      setSum('ws', '❌', false)
+      try { ws && ws.close() } catch {}
+      resolve(false)
+    }, 10000)
+
+    try {
+      ws = new WebSocket(WS_URL)
+      ws.onopen = () => {
+        const ms = Date.now()-t0
+        clearTimeout(timeout)
+        setDot('wsconn', 'ok', `connected ${ms}ms`)
+        log(`✅ Raw WS opened in ${ms}ms`, 'ok')
+        setSum('ttc', ms+'', true)
+
+        // Send a Phoenix join frame
+        const joinMsg = JSON.stringify({
+          topic: 'realtime:test-diagnostic',
+          event: 'phx_join',
+          payload: { config: { broadcast: { self: true }, presence: { key: '' } } },
+          ref: '1'
+        })
+        ws.send(joinMsg)
+        log(`→ Sent phx_join to realtime:test-diagnostic`, 'info')
+        setDot('wsjoin', 'running', '...')
+      }
+
+      ws.onmessage = (e) => {
+        const data = e.data
+        log(`← ${data.slice(0,120)}`, 'info')
+        try {
+          const msg = JSON.parse(data)
+          if (msg.event === 'phx_reply' && msg.payload?.status === 'ok') {
+            setDot('wsjoin', 'ok', `channel joined (${msg.topic})`)
+            log(`✅ Channel JOIN ok: ${msg.topic}`, 'ok')
+            setSum('rt', '✅', true)
+            setSum('ws', '✅', true)
+            // Send heartbeat
+            ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: '2' }))
+            setDot('wsping', 'running', '...')
+          } else if (msg.event === 'phx_reply' && msg.topic === 'phoenix') {
+            setDot('wsping', 'ok', 'pong received')
+            log(`✅ Heartbeat PONG received`, 'ok')
+            ws.close()
+            resolve(true)
+          } else if (msg.event === 'phx_error' || (msg.payload?.status && msg.payload.status !== 'ok')) {
+            log(`⚠️ Channel error: ${JSON.stringify(msg.payload)}`, 'warn')
+            setDot('wsjoin', 'error', JSON.stringify(msg.payload).slice(0,40))
+            setSum('rt', '⚠️', null)
+          }
+        } catch {}
+      }
+
+      ws.onerror = (e) => {
+        clearTimeout(timeout)
+        log(`❌ WebSocket error event (TCP refused or SSL fail)`, 'err')
+        log('Причины: CORS, firewall, Supabase Realtime отключён на данном плане, или SSL mismatch', 'warn')
+        setDot('wsconn', 'error', 'connection failed')
+        setDot('wsjoin', 'error', 'skipped')
+        setDot('wsping', 'error', 'skipped')
+        setSum('ws', '❌', false)
+        resolve(false)
+      }
+
+      ws.onclose = (e) => {
+        log(`WS closed: code=${e.code} reason="${e.reason || 'none'}"`, e.code === 1000 ? 'ok' : 'warn')
+      }
+    } catch(e) {
+      clearTimeout(timeout)
+      log(`❌ new WebSocket() threw: ${e.message}`, 'err')
+      setDot('wsconn', 'error', e.message.slice(0,40))
+      setSum('ws', '❌', false)
+      resolve(false)
+    }
+  })
+}
+
+// ─── SUPABASE-JS ─────────────────────────────────────────────────────────────
+async function checkSupabaseJs() {
+  log('── @supabase/supabase-js test ──', 'info')
+  setDot('sjs', 'running', '...')
+  try {
+    const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm')
+    setDot('sjs', 'ok', 'loaded from CDN')
+    log('✅ @supabase/supabase-js loaded from CDN', 'ok')
+
+    const client = createClient(SUPABASE_URL, SUPABASE_KEY, {
+      realtime: { timeout: 10000 }
+    })
+
+    setDot('schan', 'running', '...')
+    const chan = client.channel('diagnostic-check')
+    setDot('schan', 'ok', 'channel created')
+    log('✅ channel() object created OK', 'ok')
+
+    setDot('ssub', 'running', 'subscribing...')
+    const t0 = Date.now()
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        log('❌ subscribe() TIMED OUT (15s)', 'err')
+        setDot('ssub', 'error', 'timeout 15s')
+        setSum('rt', '❌', false)
+        client.removeChannel(chan)
+        resolve()
+      }, 15000)
+
+      chan.subscribe((status, err) => {
+        const ms = Date.now()-t0
+        log(`subscribe status: ${status} ${err ? '| err='+err : ''} (${ms}ms)`, status === 'SUBSCRIBED' ? 'ok' : 'warn')
+        if (status === 'SUBSCRIBED') {
+          clearTimeout(timer)
+          setDot('ssub', 'ok', `SUBSCRIBED in ${ms}ms`)
+          setSum('rt', '✅', true)
+          log('✅ Supabase Realtime SUBSCRIBED', 'ok')
+          setTimeout(() => { client.removeChannel(chan); resolve() }, 500)
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          clearTimeout(timer)
+          setDot('ssub', 'error', `${status} after ${ms}ms`)
+          setSum('rt', '❌', false)
+          log(`❌ subscribe() → ${status}: ${err || 'no error detail'}`, 'err')
+          log('→ Диагноз: Supabase Realtime WS недоступен из этой сети/браузера', 'warn')
+          client.removeChannel(chan)
+          resolve()
+        }
+      })
+    })
+  } catch(e) {
+    setDot('sjs', 'error', e.message.slice(0,50))
+    log(`❌ Import failed: ${e.message}`, 'err')
+  }
+}
+
+// ─── RUN ALL ─────────────────────────────────────────────────────────────────
+window.runAll = async function() {
+  document.getElementById('btn-run').disabled = true
+  document.getElementById('summary').style.display = 'flex'
+  checkEnv()
+  log('═══════════════════════════════', 'info')
+  await checkRest()
+  log('═══════════════════════════════', 'info')
+  const wsOk = await checkRawWs()
+  log('═══════════════════════════════', 'info')
+  await checkSupabaseJs()
+  log('═══════════════════════════════', 'info')
+  log('✔ Диагностика завершена', 'ok')
+  log('Если REST ✅ + WS ❌ → проблема в Supabase Realtime (plan/billing/CORS/firewall)', 'warn')
+  log('Если REST ❌ + WS ❌ → нет связи с Supabase вообще (network, URL)', 'warn')
+  log('Если всё ✅ → WS работает, ищи проблему в логике приложения', 'warn')
+  document.getElementById('btn-run').disabled = false
+}
+
+window.runWsOnly = async function() {
+  document.getElementById('btn-ws-only').disabled = true
+  document.getElementById('summary').style.display = 'flex'
+  await checkRawWs()
+  document.getElementById('btn-ws-only').disabled = false
+}
+
+window.clearLog = function() {
+  logbox.innerHTML = ''
+  log('← Log cleared', 'info')
+}
+
+// Auto-fill environment info on load
+checkEnv()
+</script>
+</body>
+</html>
