@@ -1236,7 +1236,7 @@ export default function Game() {
         // Real Gemini AI scoring — with explicit timeout
         log('Starting Gemini AI scoring...')
         const result = await withTimeout(
-          scoreWithGemini(originalBlob, mimicReversedBlob, session.guest_guess_text, session.ai_actual_transcription, room?.game_language || 'ru'),
+          scoreWithGemini(originalBlob, mimicReversedBlob, session.guest_guess_text, session.ai_actual_transcription, room?.game_language || 'ru', roomId),
           SCORING_TIMEOUT_MS
         )
         log(`Gemini scoring complete. score=${result.score}, model=${result.model}`)

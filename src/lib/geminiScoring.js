@@ -6,19 +6,29 @@
  */
 import { supabase } from './supabase'
 
-const INVOKE_TIMEOUT_MS = 35_000 // Hard limit for Edge Function round-trip
+const INVOKE_TIMEOUT_MS = 40_000 // Hard limit for Edge Function round-trip
 
-/**
- * Convert Blob to base64 data string
- */
-async function blobToBase64(blob) {
-  const buffer = await blob.arrayBuffer()
-  const bytes = new Uint8Array(buffer)
-  let binary = ''
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i])
-  }
-  return btoa(binary)
+// ─── Non-blocking base64 conversion ──────────────────────────────────────────
+// IMPORTANT: Do NOT use the synchronous `String.fromCharCode` loop — it blocks
+// the JS Event Loop for large audio files (1-3s freeze on mobile), causing the
+// browser to appear hung and breaking abort signals.
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const sizeKb = (blob.size / 1024).toFixed(0)
+    console.log(`[geminiScoring] blobToBase64: starting (${sizeKb}kB, type=${blob.type})`)
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result // data:...;base64,XXXXXXX
+      const base64 = result.split(',')[1]
+      console.log(`[geminiScoring] blobToBase64: done (${(base64.length / 1024).toFixed(0)}kB base64)`)
+      resolve(base64)
+    }
+    reader.onerror = (e) => {
+      console.error('[geminiScoring] blobToBase64 FileReader error:', e)
+      reject(new Error('FileReader error: ' + e))
+    }
+    reader.readAsDataURL(blob)
+  })
 }
 
 /**
@@ -32,13 +42,17 @@ async function invokeWithTimeout(fnName, body, timeoutMs = INVOKE_TIMEOUT_MS) {
     controller.abort()
   }, timeoutMs)
 
+  const t0 = Date.now()
+  console.log(`[geminiScoring] invokeWithTimeout: calling '${fnName}' (timeout=${timeoutMs}ms)`)
+
   try {
-    // supabase.functions.invoke uses fetch internally; pass the signal via options
     const { data, error } = await supabase.functions.invoke(fnName, {
       body,
       signal: controller.signal,
     })
     clearTimeout(timer)
+    const elapsed = Date.now() - t0
+    console.log(`[geminiScoring] invokeWithTimeout: '${fnName}' returned in ${elapsed}ms`)
 
     if (error) {
       console.error(`[geminiScoring] Edge Function '${fnName}' returned error:`, error)
@@ -47,9 +61,12 @@ async function invokeWithTimeout(fnName, body, timeoutMs = INVOKE_TIMEOUT_MS) {
     return data
   } catch (err) {
     clearTimeout(timer)
+    const elapsed = Date.now() - t0
     if (err.name === 'AbortError') {
+      console.error(`[geminiScoring] TIMEOUT: '${fnName}' aborted after ${elapsed}ms`)
       throw new Error('TIMEOUT')
     }
+    console.error(`[geminiScoring] '${fnName}' threw after ${elapsed}ms:`, err.message)
     throw err
   }
 }
@@ -88,13 +105,15 @@ export async function transcribeHostAudio(originalBlob, language = 'ru') {
 
 /**
  * Score audio similarity using Gemini AI via Supabase Edge Functions.
- * THROWS on timeout or network error — caller should handle with withTimeout().
+ * THROWS on timeout or network error — caller should handle with withTimeout()
+ * in Game.jsx (additional safety layer on top of invokeWithTimeout).
  *
  * @param {Blob} originalBlob — original host audio
  * @param {Blob} mimicBlob — mimic reversed audio
  * @param {string} guestGuessText — guest's written guess
  * @param {string} actualTranscriptionText — confirmed host transcription
  * @param {string} [language='ru'] — game language id
+ * @param {string} [roomId=''] — room id for logging
  * @returns {object} { score, comment, breakdown, model, actual_transcription, attempt_transcription }
  */
 export async function scoreWithGemini(
@@ -102,17 +121,27 @@ export async function scoreWithGemini(
   mimicBlob,
   guestGuessText = '',
   actualTranscriptionText = '',
-  language = 'ru'
+  language = 'ru',
+  roomId = ''
 ) {
-  console.log('[geminiScoring] scoreWithGemini: converting blobs...')
+  console.log('[geminiScoring] scoreWithGemini: start — converting blobs in parallel...')
+  const t0 = Date.now()
+
+  // Both conversions are non-blocking (FileReader based) and run in parallel
   const [originalB64, mimicB64] = await Promise.all([
     blobToBase64(originalBlob),
     blobToBase64(mimicBlob),
   ])
 
+  console.log(
+    `[geminiScoring] scoreWithGemini: blobs ready in ${Date.now() - t0}ms — ` +
+    `original=${(originalB64.length/1024).toFixed(0)}kB, mimic=${(mimicB64.length/1024).toFixed(0)}kB`
+  )
+
   const originalMimeType = originalBlob.type || 'audio/webm'
   const mimicMimeType = mimicBlob.type || 'audio/wav'
-  console.log(`[geminiScoring] scoreWithGemini: original=${(originalB64.length/1024).toFixed(0)}kB, mimic=${(mimicB64.length/1024).toFixed(0)}kB — invoking edge fn...`)
+
+  console.log(`[geminiScoring] scoreWithGemini: invoking edge fn... language=${language}`)
 
   // NOTE: intentionally NOT catching here — let errors propagate to caller (Game.jsx triggerScoring)
   const data = await invokeWithTimeout('gemini-scoring', {
@@ -123,13 +152,15 @@ export async function scoreWithGemini(
     guestGuessText,
     actualTranscriptionText,
     language,
+    room_id: roomId,
   })
 
   if (!data) {
     throw new Error('Edge Function returned empty response')
   }
 
-  console.log(`[geminiScoring] scoreWithGemini: score=${data.score}, model=${data.model}`)
+  const total = Date.now() - t0
+  console.log(`[geminiScoring] scoreWithGemini: COMPLETE in ${total}ms — score=${data.score}, model=${data.model}`)
   return data
 }
 
