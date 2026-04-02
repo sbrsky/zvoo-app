@@ -68,6 +68,9 @@ export default function Lobby() {
   // Unique channel name per mount avoids Supabase client returning a stale/broken channel
   const channelNameRef = useRef(`lobby_rooms_${Date.now()}`)
 
+  // Ref to track the refresh timeout so we can cancel it on success
+  const refreshTimeoutRef = useRef(null)
+
   const fetchRooms = useCallback(async (manual = false) => {
     const currentUser = userRef.current
     fetchedUserIdRef.current = currentUser?.id || null
@@ -75,6 +78,14 @@ export default function Lobby() {
 
     if (manual) {
       setRefreshing(true)
+
+      // Safety: if refresh takes more than 5s — force full page reload
+      if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current)
+      refreshTimeoutRef.current = setTimeout(() => {
+        devWarn('[Lobby] Refresh timed out after 5s — forcing page reload')
+        window.location.reload()
+      }, 5000)
+
       devLog('Manual refresh: refreshing Supabase auth session...')
       try {
         const { data, error } = await supabase.auth.refreshSession()
@@ -87,11 +98,19 @@ export default function Lobby() {
     try {
       devLog('Fetching rooms from DB...')
       const startTs = Date.now()
-      const { data, error } = await supabase
+
+      // Race the DB query against an 8-second timeout so we never hang forever
+      const fetchPromise = supabase
         .from('rooms')
         .select('*, host:profiles!rooms_host_id_fkey(*), guest:profiles!rooms_guest_id_fkey(*)')
         .in('status', ['waiting', 'playing'])
         .order('created_at', { ascending: false })
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('FETCH_TIMEOUT')), 8000)
+      )
+
+      const { data, error } = await Promise.race([fetchPromise, timeoutPromise])
       devLog(`DB response in ${Date.now() - startTs}ms — rooms=${data?.length ?? 'err'}, error=${error?.message ?? 'none'}`)
 
       if (error) throw error
@@ -130,11 +149,23 @@ export default function Lobby() {
         }
       }
     } catch (e) {
+      if (e.message === 'FETCH_TIMEOUT') {
+        devWarn('[Lobby] DB query timed out after 8s — forcing page reload')
+        window.location.reload()
+        return // stop execution, page is reloading
+      }
       devError('Caught unhandled error in fetchRooms:', e)
       setFetchError(e.message || 'Ошибка загрузки комнат')
     } finally {
       setLoading(false)
-      if (manual) setTimeout(() => setRefreshing(false), 400)
+      if (manual) {
+        // Cancel the 5s safety timeout — we finished in time
+        if (refreshTimeoutRef.current) {
+          clearTimeout(refreshTimeoutRef.current)
+          refreshTimeoutRef.current = null
+        }
+        setTimeout(() => setRefreshing(false), 400)
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // empty deps — reads user via userRef to avoid stale-closure / useEffect re-runs
@@ -149,6 +180,16 @@ export default function Lobby() {
 
   // Keep ref in sync
   useEffect(() => { fetchRoomsRef.current = fetchRooms }, [fetchRooms])
+
+  // ── Watchdog: if loading is still true after 10s, force a page reload ──
+  useEffect(() => {
+    if (!loading) return
+    const watchdog = setTimeout(() => {
+      devWarn('[Lobby] Stuck loading after 10s — forcing page reload')
+      window.location.reload()
+    }, 10_000)
+    return () => clearTimeout(watchdog)
+  }, [loading])
 
   useEffect(() => {
     devLog('Channel useEffect mounting, channelName=', channelNameRef.current)
@@ -195,6 +236,7 @@ export default function Lobby() {
       supabase.removeChannel(channel)
       clearInterval(poll)
       document.removeEventListener('visibilitychange', handleVisibility)
+      if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current)
     }
   }, []) // runs exactly once — channel is stable for the lifetime of this Lobby mount
 
