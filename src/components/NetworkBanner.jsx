@@ -1,55 +1,87 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNetworkStatus } from '../hooks/useNetworkStatus'
 
 /**
- * NetworkBanner — shows a sticky top banner when:
- *  - Browser goes offline (navigator.onLine = false)
- *  - Supabase WebSocket disconnects (wsStatus !== 'SUBSCRIBED')
+ * NetworkBanner — shows a sticky top banner ONLY when a real problem occurs:
+ *  - Browser goes offline (navigator.onLine = false)  → shows immediately
+ *  - WebSocket was healthy, then broken for > 8 seconds → shows warning
+ *
+ * Does NOT show during the initial connection phase to avoid false positives.
  *
  * Props:
- *   wsStatus   string   value from useRoom().wsStatus (e.g. 'SUBSCRIBED', 'CHANNEL_ERROR')
- *   onReload   fn       called when user clicks "Обновить" button (optional, defaults to nothing)
+ *   wsStatus   string   value from useRoom().wsStatus ('SUBSCRIBED', 'CHANNEL_ERROR', etc.)
+ *   onReload   fn       optional callback for "Обновить" button
  */
 export function NetworkBanner({ wsStatus = 'SUBSCRIBED', onReload }) {
   const { isOnline } = useNetworkStatus()
-  const [visible, setVisible]           = useState(false)
-  const [offline, setOffline]           = useState(false)
+  const [visible, setVisible]               = useState(false)
   const [showReconnected, setShowReconnected] = useState(false)
+
+  // Track whether we've established a healthy connection this session
+  const wasSubscribedRef = useRef(false)
+  // Keep latest wsStatus in a ref so async timers can read fresh value
+  const wsStatusRef      = useRef(wsStatus)
+  const wsTimerRef       = useRef(null)
+
+  useEffect(() => { wsStatusRef.current = wsStatus }, [wsStatus])
 
   const wsHealthy = wsStatus === 'SUBSCRIBED'
 
+  // Once we reach SUBSCRIBED for the first time, mark session as "was healthy"
   useEffect(() => {
-    const browserDown = !isOnline
-    const wsDown = !wsHealthy
+    if (wsHealthy) wasSubscribedRef.current = true
+  }, [wsHealthy])
 
-    if (browserDown || wsDown) {
-      // Wait 3s before showing — avoids false positives from brief blips
-      const showTimer = setTimeout(() => {
-        // Re-check: only show if still down after the delay
-        if (!navigator.onLine || !wsHealthy) {
-          setOffline(!navigator.onLine)
-          setVisible(true)
-          setShowReconnected(false)
-        }
-      }, 3000)
-      return () => clearTimeout(showTimer)
+  // ── Browser offline: show immediately ──────────────────────────────────────
+  useEffect(() => {
+    if (!isOnline) {
+      if (wsTimerRef.current) clearTimeout(wsTimerRef.current)
+      setShowReconnected(false)
+      setVisible(true)
     } else {
-      if (visible) {
-        // Flash "reconnected" then hide
+      // Came back online — hide if it was an offline banner (ws may still be reconnecting)
+      if (visible && wsHealthy) {
         setShowReconnected(true)
-        const t = setTimeout(() => {
+        wsTimerRef.current = setTimeout(() => {
           setVisible(false)
           setShowReconnected(false)
         }, 2000)
-        return () => clearTimeout(t)
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOnline, wsHealthy])
+  }, [isOnline])
 
-  // Derive message
+  // ── WS health: only show if we were previously healthy and now broken for 8s ──
+  useEffect(() => {
+    if (wsTimerRef.current) clearTimeout(wsTimerRef.current)
+
+    if (!wsHealthy && isOnline) {
+      if (!wasSubscribedRef.current) {
+        // Still on initial connect — DON'T show banner, give it time
+        return
+      }
+      // Was healthy before, now broken — wait 8s then show
+      wsTimerRef.current = setTimeout(() => {
+        if (wsStatusRef.current !== 'SUBSCRIBED') {
+          setShowReconnected(false)
+          setVisible(true)
+        }
+      }, 8000)
+    } else if (wsHealthy && visible) {
+      // Recovered — flash green then hide
+      setShowReconnected(true)
+      wsTimerRef.current = setTimeout(() => {
+        setVisible(false)
+        setShowReconnected(false)
+      }, 2000)
+    }
+
+    return () => { if (wsTimerRef.current) clearTimeout(wsTimerRef.current) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wsHealthy, isOnline])
+
   const wsConnecting = wsStatus === 'CONNECTING' || wsStatus === 'JOINING'
-  const wsLabel = offline
+  const wsLabel = !isOnline
     ? 'Нет интернета'
     : wsConnecting
     ? 'Переподключение...'
@@ -90,7 +122,7 @@ export function NetworkBanner({ wsStatus = 'SUBSCRIBED', onReload }) {
           </>
         ) : (
           <>
-            <span style={{ fontSize: '16px', animation: 'pulse-glow 1s infinite' }}>📡</span>
+            <span style={{ fontSize: '16px' }}>📡</span>
             <span>{wsLabel}</span>
             {onReload && (
               <button
