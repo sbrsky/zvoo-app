@@ -22,7 +22,8 @@ export function useRoom(roomId, userId) {
   const userIdRef = useRef(userId)
   const reconnectTimerRef = useRef(null)
   const reconnectAttemptsRef = useRef(0)
-  const subscribedAtRef = useRef(null) // timestamp when SUBSCRIBED first achieved
+  const subscribedAtRef = useRef(null)
+  const dbPollIntervalRef = useRef(null) // polling fallback when WS is down
 
   useEffect(() => { roomIdRef.current = roomId }, [roomId])
   useEffect(() => { userIdRef.current = userId }, [userId])
@@ -63,12 +64,37 @@ export function useRoom(roomId, userId) {
       document.removeEventListener('visibilitychange', handleVisibility)
       if (visibilityTimer) clearTimeout(visibilityTimer)
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
+      stopDbPolling()
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current)
         channelRef.current = null
       }
     }
   }, [roomId, userId])
+
+  // ── DB polling fallback ────────────────────────────────────────────────────
+  // When Supabase Realtime WS is down, poll the DB every 5s so room state
+  // (e.g. guest joining) is still discovered without needing to reload.
+  function startDbPolling() {
+    if (dbPollIntervalRef.current) return // already running
+    console.log('[useRoom] Starting DB polling fallback (WS down)')
+    dbPollIntervalRef.current = setInterval(() => {
+      if (channelStatusRef.current === 'SUBSCRIBED') {
+        // WS recovered — stop polling
+        stopDbPolling()
+        return
+      }
+      fetchRoom()
+    }, 5000)
+  }
+
+  function stopDbPolling() {
+    if (dbPollIntervalRef.current) {
+      clearInterval(dbPollIntervalRef.current)
+      dbPollIntervalRef.current = null
+      console.log('[useRoom] DB polling stopped (WS healthy)')
+    }
+  }
 
   async function fetchRoom() {
     const { data, error } = await supabase.from('rooms').select('*').eq('id', roomId).maybeSingle()
@@ -132,9 +158,13 @@ export function useRoom(roomId, userId) {
         if (status === 'SUBSCRIBED') {
           reconnectAttemptsRef.current = 0
           subscribedAtRef.current = Date.now()
+          stopDbPolling() // WS working — no need for polling fallback
           fetchRoom()
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           const attempt = reconnectAttemptsRef.current
+
+          // Start DB polling immediately so guests/room updates are not missed
+          startDbPolling()
 
           // Give up after MAX attempts — show banner, let user act
           if (attempt >= MAX_RECONNECT_ATTEMPTS) {
