@@ -12,26 +12,28 @@ steps:
       - '-c'
       - |
         # Map branch → Cloud Run service name
-        if [ "$$BRANCH_NAME" = "main" ]; then
+        # $BRANCH_NAME = Cloud Build substitution (single $)
+        # $$VAR = escape for secrets injected via secretEnv
+        if [ "$BRANCH_NAME" = "main" ]; then
           SERVICE="zvoo-prod"
-        elif [ "$$BRANCH_NAME" = "stage" ]; then
+        elif [ "$BRANCH_NAME" = "stage" ]; then
           SERVICE="zvoo-stage"
         else
           SERVICE="zvoo-dev"
         fi
 
-        echo "Building $$SERVICE (branch: $$BRANCH_NAME)"
+        echo "Building $SERVICE (branch: $BRANCH_NAME)"
 
         docker build \
           --build-arg VITE_SUPABASE_URL="$$VITE_SUPABASE_URL" \
           --build-arg VITE_SUPABASE_ANON_KEY="$$VITE_SUPABASE_ANON_KEY" \
           --build-arg VITE_GEMINI_API_KEY="$$VITE_GEMINI_API_KEY" \
           --build-arg VITE_ADMIN_EMAILS="$$VITE_ADMIN_EMAILS" \
-          -t gcr.io/$PROJECT_ID/$$SERVICE:$COMMIT_SHA \
-          -t gcr.io/$PROJECT_ID/$$SERVICE:latest \
+          -t gcr.io/$PROJECT_ID/$SERVICE:$COMMIT_SHA \
+          -t gcr.io/$PROJECT_ID/$SERVICE:latest \
           .
 
-        echo "$$SERVICE" > /workspace/_service_name
+        echo "$SERVICE" > /workspace/_service_name
 
   # ── Push image to Container Registry ────────────────────────
   - name: 'gcr.io/cloud-builders/docker'
@@ -41,8 +43,8 @@ steps:
       - '-c'
       - |
         SERVICE=$(cat /workspace/_service_name)
-        docker push gcr.io/$PROJECT_ID/$$SERVICE:$COMMIT_SHA
-        docker push gcr.io/$PROJECT_ID/$$SERVICE:latest
+        docker push gcr.io/$PROJECT_ID/$SERVICE:$COMMIT_SHA
+        docker push gcr.io/$PROJECT_ID/$SERVICE:latest
 
   # ── Deploy to Cloud Run ──────────────────────────────────────
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -52,8 +54,8 @@ steps:
       - '-c'
       - |
         SERVICE=$(cat /workspace/_service_name)
-        gcloud run deploy $$SERVICE \
-          --image gcr.io/$PROJECT_ID/$$SERVICE:$COMMIT_SHA \
+        gcloud run deploy $SERVICE \
+          --image gcr.io/$PROJECT_ID/$SERVICE:$COMMIT_SHA \
           --region europe-west1 \
           --platform managed \
           --allow-unauthenticated \
