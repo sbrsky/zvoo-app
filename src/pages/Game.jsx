@@ -234,6 +234,7 @@ export default function Game() {
   const { user, profile } = useAuth()
   const {
     room, gameSession, gameState, isHost, isGuest, sessionCreatedRef,
+    wsStatus,
     broadcastState, joinRoom, closeRoom, createSession, updateSession,
     updateRoom, updateRoomStatus, fetchRoom, fetchGameSession,
   } = useRoom(roomId, user?.id)
