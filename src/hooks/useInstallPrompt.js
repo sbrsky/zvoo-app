@@ -2,18 +2,25 @@ import { useState, useEffect, useCallback } from 'react'
 
 /**
  * Hook to manage the "Add to Home Screen" install prompt.
- * Captures the `beforeinstallprompt` event and provides a way to trigger it.
+ * Captures the `beforeinstallprompt` event (Android/Desktop Chrome) and provides a way to trigger it.
+ * Also detects iOS Safari which requires manual install via Share menu.
  */
 export function useInstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState(null)
   const [isInstallable, setIsInstallable] = useState(false)
   const [isInstalled, setIsInstalled] = useState(false)
 
+  // Detect if running in standalone mode (already installed)
+  const isStandalone =
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true
+
+  // Detect iOS Safari (doesn't support beforeinstallprompt)
+  const isIos = /iphone|ipad|ipod/i.test(window.navigator.userAgent)
+  const isSafari = /^((?!chrome|android).)*safari/i.test(window.navigator.userAgent)
+  const isIosInstallable = isIos && isSafari && !isStandalone
+
   useEffect(() => {
-    // Check if already installed (display-mode: standalone)
-    const isStandalone =
-      window.matchMedia('(display-mode: standalone)').matches ||
-      window.navigator.standalone === true
     setIsInstalled(isStandalone)
 
     const handler = (e) => {
@@ -65,6 +72,7 @@ export function useInstallPrompt() {
 
   return {
     isInstallable: isInstallable && !isInstalled && !wasDismissed,
+    isIosInstallable: isIosInstallable && !wasDismissed,
     isInstalled,
     promptInstall,
     dismissInstall,

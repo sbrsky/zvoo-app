@@ -14,6 +14,8 @@ export function useRoom(roomId, userId) {
   const sessionCreatedRef = useRef(false)
   const roomIdRef = useRef(roomId)
   const userIdRef = useRef(userId)
+  const reconnectTimerRef = useRef(null) // auto-reconnect backoff timer
+  const reconnectAttemptsRef = useRef(0)
 
   useEffect(() => { roomIdRef.current = roomId }, [roomId])
   useEffect(() => { userIdRef.current = userId }, [userId])
@@ -45,6 +47,7 @@ export function useRoom(roomId, userId) {
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility)
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current)
         channelRef.current = null
@@ -112,8 +115,22 @@ export function useRoom(roomId, userId) {
       })
       .subscribe((status) => {
         channelStatusRef.current = status
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn('[useRoom] Channel error, will reconnect on next send or tab focus:', status)
+        if (status === 'SUBSCRIBED') {
+          // Successfully subscribed — reset backoff counter
+          reconnectAttemptsRef.current = 0
+          // Fetch latest room state in case we missed DB changes while reconnecting
+          fetchRoom()
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          // Exponential backoff: 2s, 4s, 8s, 16s, max 30s
+          const attempt = reconnectAttemptsRef.current
+          const delay = Math.min(2000 * Math.pow(2, attempt), 30000)
+          reconnectAttemptsRef.current = attempt + 1
+          console.warn(`[useRoom] Channel ${status} — reconnecting in ${delay}ms (attempt ${attempt + 1})`)
+          if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
+          reconnectTimerRef.current = setTimeout(() => {
+            if (channelRef.current) supabase.removeChannel(channelRef.current)
+            subscribeToRoom()
+          }, delay)
         }
       })
 
