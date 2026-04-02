@@ -9,6 +9,7 @@ const TABS = [
   { key: 'network', label: '🌐 Network',  desc: 'HTTP requests' },
   { key: 'events',  label: '⚡ Events',   desc: 'Realtime & bus events' },
   { key: 'state',   label: '📊 State',    desc: 'Auth & room state' },
+  { key: 'ai',      label: '🤖 AI Logs',  desc: 'Gemini scoring history' },
   { key: 'tests',   label: '🧪 Тесты',   desc: 'Regression suite' },
   { key: 'settings',label: '⚙️ Настройки',desc: 'App settings' },
 ]
@@ -38,9 +39,15 @@ export default function Admin() {
   const bottomRef = useRef(null)
 
   // AI Admin settings state
-  const [geminiModel, setGeminiModel] = useState('gemini-3.1-flash-lite-preview')
-  const [savedModel, setSavedModel] = useState('gemini-3.1-flash-lite-preview')
+  const [geminiModel, setGeminiModel] = useState('gemini-2.0-flash')
+  const [savedModel, setSavedModel] = useState('gemini-2.0-flash')
   const [savingModel, setSavingModel] = useState(false)
+
+  // AI Logs state
+  const [aiLogs, setAiLogs] = useState([])
+  const [aiLogsLoading, setAiLogsLoading] = useState(false)
+  const [aiLogsFilter, setAiLogsFilter] = useState('ALL') // ALL | ok | error | timeout | fallback
+  const [aiLogExpanded, setAiLogExpanded] = useState(null)
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -52,17 +59,29 @@ export default function Admin() {
         .maybeSingle()
       if (error) { console.error('fetchSettings error:', error); return }
       if (data && data.value !== undefined) {
-        // JSONB strings arrive as plain JS strings (Supabase auto-parses JSON)
-        // But sometimes raw value includes surrounding quotes — strip them
         const raw = String(data.value)
         const val = raw.replace(/^"|"$/g, '').trim()
-        if (val) {
-          setGeminiModel(val)
-          setSavedModel(val)
-        }
+        if (val) { setGeminiModel(val); setSavedModel(val) }
       }
     }
     fetchSettings()
+
+    // Fetch AI Logs when that tab is active
+    if (tab === 'ai') {
+      setAiLogsLoading(true)
+      import('../lib/supabase').then(({ supabase }) => {
+        supabase
+          .from('ai_scoring_logs')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(100)
+          .then(({ data, error }) => {
+            if (error) console.error('AI logs fetch error:', error)
+            else setAiLogs(data || [])
+            setAiLogsLoading(false)
+          })
+      })
+    }
   }, [tab])
 
   const handleSaveModel = async () => {
@@ -399,6 +418,131 @@ export default function Admin() {
             </div>
           </div>
         )}
+        {/* AI LOGS TAB */}
+        {tab === 'ai' && (
+          <div style={{ padding: '16px' }}>
+            {/* Filter bar */}
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+              {['ALL','ok','error','timeout','fallback'].map(f => (
+                <button key={f} onClick={() => setAiLogsFilter(f)} style={{
+                  padding: '5px 12px', borderRadius: '8px', border: 'none', fontSize: '11px', fontWeight: 700,
+                  background: aiLogsFilter === f ? 'rgba(124,58,237,0.25)' : 'rgba(255,255,255,0.05)',
+                  color: aiLogsFilter === f ? '#4DD9C8' : 'rgba(255,255,255,0.4)', cursor: 'pointer',
+                }}>{f.toUpperCase()}</button>
+              ))}
+              <button onClick={() => {
+                setAiLogsLoading(true)
+                import('../lib/supabase').then(({ supabase }) => {
+                  supabase.from('ai_scoring_logs').select('*').order('created_at', { ascending: false }).limit(100)
+                    .then(({ data }) => { setAiLogs(data || []); setAiLogsLoading(false) })
+                })
+              }} style={{
+                padding: '5px 12px', borderRadius: '8px', border: 'none', fontSize: '11px', fontWeight: 700,
+                background: 'rgba(16,185,129,0.12)', color: '#10B981', cursor: 'pointer', marginLeft: 'auto',
+              }}>🔄 Обновить</button>
+            </div>
+
+            {aiLogsLoading ? (
+              <div style={{ padding: '48px', textAlign: 'center', color: 'rgba(255,255,255,0.3)' }}>Загрузка логов...</div>
+            ) : aiLogs.length === 0 ? (
+              <div style={{ padding: '48px', textAlign: 'center', color: 'rgba(255,255,255,0.25)', fontSize: '14px' }}>🤖 Нет AI логов. Сыграйте раунд!</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '65vh', overflowY: 'auto' }}>
+                {aiLogs
+                  .filter(l => aiLogsFilter === 'ALL' || l.status === aiLogsFilter)
+                  .map(log => {
+                    const statusColors = {
+                      ok:      { bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.3)', badge: '#10B981' },
+                      error:   { bg: 'rgba(239,68,68,0.08)',  border: 'rgba(239,68,68,0.3)',  badge: '#EF4444' },
+                      timeout: { bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.3)', badge: '#F59E0B' },
+                      fallback:{ bg: 'rgba(167,139,250,0.08)',border: 'rgba(167,139,250,0.3)',badge: '#A78BFA' },
+                    }
+                    const c = statusColors[log.status] || statusColors.error
+                    const expanded = aiLogExpanded === log.id
+                    const created = new Date(log.created_at)
+                    const timeStr = created.toLocaleString('ru-RU', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                    return (
+                      <div key={log.id}
+                        onClick={() => setAiLogExpanded(expanded ? null : log.id)}
+                        style={{
+                          padding: '10px 14px', borderRadius: '10px', cursor: 'pointer',
+                          background: c.bg, border: `1px solid ${c.border}`,
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        {/* Row summary */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '4px', background: c.border, color: 'white' }}>
+                            {(log.status || '?').toUpperCase()}
+                          </span>
+                          <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.35)', fontFamily: 'monospace' }}>{timeStr}</span>
+                          <span style={{ fontSize: '12px', color: 'white', fontWeight: 600 }}>
+                            {log.action || 'score'}
+                          </span>
+                          {log.score != null && (
+                            <span style={{ fontSize: '12px', fontWeight: 800, color: log.score >= 60 ? '#10B981' : log.score >= 40 ? '#F59E0B' : '#EF4444' }}>
+                              {log.score}/100
+                            </span>
+                          )}
+                          {log.duration_ms && (
+                            <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.4)' }}>{log.duration_ms}ms</span>
+                          )}
+                          {log.used_model && (
+                            <span style={{ fontSize: '10px', color: '#4DD9C8', fontFamily: 'monospace' }}>{log.used_model}</span>
+                          )}
+                          {log.room_id && (
+                            <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}>room:{log.room_id.slice(0,8)}</span>
+                          )}
+                        </div>
+
+                        {/* Error message inline */}
+                        {log.error_message && (
+                          <div style={{ marginTop: '6px', fontSize: '11px', color: '#FCA5A5', fontFamily: 'monospace' }}>
+                            ⚠ {log.error_stage && <span style={{ color: '#FBBF24' }}>[{log.error_stage}] </span>}{log.error_message.slice(0, 150)}
+                          </div>
+                        )}
+
+                        {/* Expanded details */}
+                        {expanded && (
+                          <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {/* Audio info */}
+                            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                              <span>🎤 orig: {log.original_mime} ({log.original_b64_kb}kB)</span>
+                              <span>🔁 mimic: {log.mimic_mime} ({log.mimic_b64_kb}kB)</span>
+                              <span>🌐 lang: {log.language}</span>
+                              <span>primary: {log.primary_model}</span>
+                              <span>fallback: {log.fallback_model}</span>
+                            </div>
+                            {/* Transcriptions */}
+                            {log.original_transcription && (
+                              <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.15)' }}>
+                                <div style={{ fontSize: '10px', fontWeight: 700, color: '#10B981', marginBottom: '3px' }}>🟢 ORIGINAL</div>
+                                <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.7)', fontFamily: 'monospace' }}>{log.original_transcription}</div>
+                              </div>
+                            )}
+                            {log.attempt_transcription && (
+                              <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.15)' }}>
+                                <div style={{ fontSize: '10px', fontWeight: 700, color: '#4DD9C8', marginBottom: '3px' }}>🔵 ATTEMPT</div>
+                                <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.7)', fontFamily: 'monospace' }}>{log.attempt_transcription}</div>
+                              </div>
+                            )}
+                            {log.guest_guess && (
+                              <div style={{ padding: '8px', borderRadius: '8px', background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.15)' }}>
+                                <div style={{ fontSize: '10px', fontWeight: 700, color: '#A78BFA', marginBottom: '3px' }}>✏️ GUESS</div>
+                                <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.7)', fontFamily: 'monospace' }}>{log.guest_guess}</div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })
+                }
+              </div>
+            )}
+          </div>
+        )}
+
         {/* TESTS TAB */}
         {tab === 'tests' && <TestRunner />}
 
@@ -429,10 +573,10 @@ export default function Admin() {
                     outline: 'none', fontSize: '14px', maxWidth: '400px'
                   }}
                 >
-                  <option value="gemini-3.1-flash-lite-preview" style={{ color: 'black' }}>✨ Gemini 3.1 Flash Lite Preview (рекомендуется)</option>
-                  <option value="gemini-2.0-flash" style={{ color: 'black' }}>Gemini 2.0 Flash</option>
+                  <option value="gemini-2.0-flash" style={{ color: 'black' }}>✨ Gemini 2.0 Flash (стабильный, рекомендуется)</option>
+                  <option value="gemini-3.1-flash-lite-preview" style={{ color: 'black' }}>Gemini 3.1 Flash Lite Preview (нестабильный)</option>
                   <option value="gemini-2.5-flash" style={{ color: 'black' }}>Gemini 2.5 Flash</option>
-                  <option value="gemini-1.5-flash" style={{ color: 'black' }}>Gemini 1.5 Flash</option>
+                  <option value="gemini-1.5-flash" style={{ color: 'black' }}>Gemini 1.5 Flash (старый, надёжный)</option>
                 </select>
                 <button
                   onClick={handleSaveModel}

@@ -7,11 +7,13 @@ const corsHeaders = {
 }
 
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || ''
+const SUPABASE_URL   = Deno.env.get('SUPABASE_URL') || ''
+const SUPABASE_KEY   = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY') || ''
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 
 // Stable models that support generateContent via REST API
-const DEFAULT_MODEL = 'gemini-3.1-flash-lite-preview'
-const FALLBACK_MODEL = 'gemini-2.0-flash'
+const DEFAULT_MODEL = 'gemini-2.0-flash'            // stable fallback
+const FALLBACK_MODEL = 'gemini-1.5-flash'            // very stable last resort
 const IMAGE_MODEL   = 'gemini-3.1-flash-image-preview'
 
 // Models that DON'T support standard generateContent (Live API only)
@@ -20,33 +22,75 @@ const LIVE_API_ONLY_MODELS = [
   'gemini-2.5-flash-preview-native-audio',
 ]
 
+// ─── Structured logger ────────────────────────────────────────────────────────
+const startTime = Date.now()
+function ts() { return `+${((Date.now() - startTime) / 1000).toFixed(2)}s` }
+
+function logInfo(stage: string, msg: string, data?: unknown) {
+  console.log(JSON.stringify({ ts: ts(), stage, level: 'INFO', msg, ...(data ? { data } : {}) }))
+}
+function logWarn(stage: string, msg: string, data?: unknown) {
+  console.warn(JSON.stringify({ ts: ts(), stage, level: 'WARN', msg, ...(data ? { data } : {}) }))
+}
+function logError(stage: string, msg: string, data?: unknown) {
+  console.error(JSON.stringify({ ts: ts(), stage, level: 'ERROR', msg, ...(data ? { data } : {}) }))
+}
+
+// ─── DB logger: persist result to ai_scoring_logs ────────────────────────────
+async function persistLog(row: Record<string, unknown>) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    logWarn('persistLog', 'SUPABASE_URL or SUPABASE_KEY missing — skipping DB log')
+    return
+  }
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/ai_scoring_logs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(row),
+    })
+    if (!resp.ok) {
+      logWarn('persistLog', `DB insert failed: ${resp.status}`, await resp.text())
+    } else {
+      logInfo('persistLog', 'Diagnostic log saved to ai_scoring_logs')
+    }
+  } catch (e: any) {
+    logWarn('persistLog', `DB insert exception: ${e.message}`)
+  }
+}
+
+// ─── Model normaliser ─────────────────────────────────────────────────────────
 function normalizeModelName(raw: string): string {
-  // Strip surrounding quotes (e.g. `"gemini-2.0-flash"` → `gemini-2.0-flash`)
-  const cleaned = raw.replace(/^"+|"+$/g, '').trim()
-  // If it's a Live API model, fall back to the REST-compatible version
+  const cleaned = raw.replace(/^\"+|\"+$/g, '').trim()
   if (LIVE_API_ONLY_MODELS.includes(cleaned)) {
-    console.log(`Model ${cleaned} is Live-API-only, using ${DEFAULT_MODEL} instead`)
+    logWarn('normalizeModel', `Model ${cleaned} is Live-API-only → using ${DEFAULT_MODEL}`)
     return DEFAULT_MODEL
   }
   return cleaned
 }
 
 async function getGeminiModels() {
-  const url = Deno.env.get('SUPABASE_URL')
-  const key = Deno.env.get('SUPABASE_ANON_KEY')
-  if (!url || !key) return { primary: DEFAULT_MODEL, fallback: FALLBACK_MODEL }
-  
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    logWarn('getModels', 'No Supabase creds → using defaults')
+    return { primary: DEFAULT_MODEL, fallback: FALLBACK_MODEL }
+  }
   try {
-    const res = await fetch(`${url}/rest/v1/app_settings?key=eq.gemini_model&select=value`, {
-      headers: { 'apikey': key, 'Authorization': `Bearer ${key}` }
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/app_settings?key=eq.gemini_model&select=value`, {
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
     })
     const data = await res.json()
-    if (data && data.length > 0 && typeof data[0].value === 'string') {
+    if (data?.length > 0 && typeof data[0].value === 'string') {
       const primary = normalizeModelName(data[0].value)
+      logInfo('getModels', `DB model config: primary=${primary}`)
       return { primary, fallback: FALLBACK_MODEL }
     }
-  } catch (e) {
-    console.error('Failed to get gemini_model from DB:', e)
+    logWarn('getModels', 'No gemini_model in app_settings → using defaults')
+  } catch (e: any) {
+    logError('getModels', `Failed to fetch model config: ${e.message}`)
   }
   return { primary: DEFAULT_MODEL, fallback: FALLBACK_MODEL }
 }
@@ -55,16 +99,13 @@ function getModelUrl(model: string) {
   return `${GEMINI_BASE_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`
 }
 
-// Language-specific system prompts for transcription
+// ─── Language hints ───────────────────────────────────────────────────────────
 const LANGUAGE_HINTS: Record<string, string> = {
   ru: 'The speaker is using RUSSIAN. Transcribe ONLY in Russian (Cyrillic). Output only the spoken words, no explanations.',
   en: 'The speaker is using ENGLISH. Transcribe ONLY in English. Output only the spoken words, no explanations.',
-  // Add more languages here — must match ids in src/lib/languages.js
 }
 
-/**
- * Step 1: Transcribe a single audio blob to text.
- */
+// ─── Request builders ─────────────────────────────────────────────────────────
 function buildTranscribeRequest(audioB64: string, mimeType: string, langHint: string) {
   return {
     contents: [{
@@ -73,16 +114,10 @@ function buildTranscribeRequest(audioB64: string, mimeType: string, langHint: st
         { inlineData: { mimeType, data: audioB64 } }
       ]
     }],
-    generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: 256,
-    }
+    generationConfig: { temperature: 0.1, maxOutputTokens: 256 }
   }
 }
 
-/**
- * Step 2: Compare two transcriptions + guest's written guess.
- */
 function buildCompareRequest(original: string, attempt: string, guestGuessText: string) {
   return {
     contents: [{
@@ -130,12 +165,20 @@ function buildCompareRequest(original: string, attempt: string, guestGuessText: 
   }
 }
 
-async function callGemini(model: string, requestBody: any, timeoutMs = 30_000) {
+// ─── Core Gemini caller with AbortController timeout ──────────────────────────
+async function callGemini(model: string, requestBody: any, timeoutMs = 28_000): Promise<any> {
   const url = getModelUrl(model)
-  console.log(`[Gemini] Calling model: ${model} (timeout=${timeoutMs}ms)`)
+  const payloadKb = (JSON.stringify(requestBody).length / 1024).toFixed(0)
+  logInfo('callGemini', `→ ${model} | payload=${payloadKb}kB | timeout=${timeoutMs}ms`)
+
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const timer = setTimeout(() => {
+    logError('callGemini', `AbortController fired after ${timeoutMs}ms for ${model}`)
+    controller.abort()
+  }, timeoutMs)
+
   let response: Response
+  const t0 = Date.now()
   try {
     response = await fetch(url, {
       method: 'POST',
@@ -143,46 +186,81 @@ async function callGemini(model: string, requestBody: any, timeoutMs = 30_000) {
       body: JSON.stringify(requestBody),
       signal: controller.signal,
     })
+  } catch (e: any) {
+    clearTimeout(timer)
+    const elapsed = Date.now() - t0
+    if (e.name === 'AbortError') {
+      logError('callGemini', `TIMEOUT: ${model} did not respond in ${elapsed}ms`)
+      throw new Error(`TIMEOUT:${model}`)
+    }
+    logError('callGemini', `Network error calling ${model}: ${e.message} (${elapsed}ms)`)
+    throw e
   } finally {
     clearTimeout(timer)
   }
 
+  const elapsed = Date.now() - t0
+  logInfo('callGemini', `← ${model} | HTTP ${response.status} | ${elapsed}ms`)
+
   if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`${model} returned ${response.status}: ${errorText.slice(0, 300)}`)
+    const errorBody = await response.text()
+    logError('callGemini', `${model} HTTP ${response.status}`, errorBody.slice(0, 500))
+    throw new Error(`${model} HTTP ${response.status}: ${errorBody.slice(0, 300)}`)
   }
 
-  return response.json()
+  const json = await response.json()
+  // Log finish_reason if available (catches SAFETY blocks, MAX_TOKENS, etc.)
+  const finishReason = json?.candidates?.[0]?.finishReason
+  if (finishReason && finishReason !== 'STOP') {
+    logWarn('callGemini', `${model} finishReason=${finishReason}`, json?.candidates?.[0]?.safetyRatings)
+  }
+  return json
 }
 
-async function transcribeAudio(audioB64: string, mimeType: string, langHint: string, models: { primary: string, fallback: string }): Promise<string> {
+// ─── Transcribe with fallback ─────────────────────────────────────────────────
+async function transcribeAudio(
+  audioB64: string, mimeType: string, langHint: string,
+  models: { primary: string; fallback: string },
+  label: string // 'original' | 'mimic'
+): Promise<string> {
+  const sizeKb = (audioB64.length / 1024).toFixed(0)
+  logInfo('transcribe', `Transcribing ${label} audio | mime=${mimeType} | size=${sizeKb}kB`)
   const req = buildTranscribeRequest(audioB64, mimeType, langHint)
-  let data
+  let data: any
   try {
     data = await callGemini(models.primary, req)
   } catch (e: any) {
-    console.warn(`Transcribe with ${models.primary} failed, trying fallback ${models.fallback}:`, e.message)
-    data = await callGemini(models.fallback, req)
+    logWarn('transcribe', `Primary (${models.primary}) failed for ${label}: ${e.message} → trying fallback`)
+    try {
+      data = await callGemini(models.fallback, req)
+    } catch (e2: any) {
+      logError('transcribe', `Fallback (${models.fallback}) also failed for ${label}: ${e2.message}`)
+      return ''
+    }
   }
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || ''
-  return text.trim()
+  const result = text.trim()
+  logInfo('transcribe', `${label} transcription: "${result.slice(0, 80)}"`)
+  return result
 }
 
+// ─── Parse compare response ───────────────────────────────────────────────────
 function parseCompareResponse(data: any) {
   const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || ''
-  // Try direct parse first (if responseMimeType worked)
+  logInfo('parseCompare', `Raw compare response: ${raw.slice(0, 200)}`)
   let parsed: any = null
   try {
     parsed = JSON.parse(raw)
   } catch {
     const jsonMatch = raw.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {
-      console.warn('Compare response not JSON:', raw.slice(0, 200))
+      logWarn('parseCompare', 'No JSON found in compare response')
       return null
     }
     try { parsed = JSON.parse(jsonMatch[0]) } catch { return null }
   }
   const score = Math.max(0, Math.min(100, Math.round(Number(parsed.score) || 50)))
+  logInfo('parseCompare', `Parsed score=${score}, comment="${(parsed.comment || '').slice(0, 60)}"`)
   return {
     score,
     comment: parsed.comment || 'AI не оставил комментарий.',
@@ -192,12 +270,17 @@ function parseCompareResponse(data: any) {
   }
 }
 
+// ─── Main handler ─────────────────────────────────────────────────────────────
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  const reqStart = Date.now()
+  let logRow: Record<string, unknown> = { status: 'ok', action: 'score' }
+
   try {
+    const body = await req.json()
     const {
       originalB64,
       originalMimeType = 'audio/webm',
@@ -207,158 +290,68 @@ serve(async (req) => {
       only_transcribe = false,
       actualTranscriptionText = '',
       language = 'ru',
-      action = '',           // 'generate_choices' | 'generate_vision' | 'generate_imaginarium' | ''
-      transcription = '',   // for superpower/imaginarium actions (legacy)
-      phrase = '',          // alias for transcription in generate_imaginarium
-      imagStyle = '',       // for generate_imaginarium: crazy_dreams | abstractionism | kids_doodles (legacy)
-      style = '',           // alias for imagStyle
-    } = await req.json()
+      action = '',
+      transcription = '',
+      phrase = '',
+      imagStyle = '',
+      style = '',
+      room_id = '',
+      session_id = '',
+    } = body
 
-    // Normalize aliases
     const _transcription = transcription || phrase
     const _imagStyle = imagStyle || style
 
+    logRow.action = action || (only_transcribe ? 'transcribe' : 'score')
+    logRow.room_id = room_id
+    logRow.session_id = session_id
+    logRow.language = language
+    logRow.original_mime = originalMimeType
+    logRow.mimic_mime = mimicMimeType
+    logRow.original_b64_kb = originalB64 ? +(originalB64.length / 1024).toFixed(1) : null
+    logRow.mimic_b64_kb = mimicB64 ? +(mimicB64.length / 1024).toFixed(1) : null
+    logRow.guest_guess = guestGuessText?.slice(0, 100) || null
+
+    logInfo('main', `Request received | action=${logRow.action} | language=${language} | room_id=${room_id}`)
+    logInfo('main', `Audio sizes | original=${logRow.original_b64_kb}kB | mimic=${logRow.mimic_b64_kb}kB`)
+
+    // ── Key check ────────────────────────────────────────────────────────────
+    if (!GEMINI_API_KEY && action !== 'generate_choices' && action !== 'generate_imaginarium') {
+      logError('main', 'GEMINI_API_KEY is not set in Edge Function environment!')
+      logRow.status = 'fallback'
+      logRow.error_stage = 'key_missing'
+      logRow.error_message = 'GEMINI_API_KEY not configured'
+      logRow.score = 50
+      logRow.duration_ms = Date.now() - reqStart
+      await persistLog(logRow)
+      return new Response(JSON.stringify({
+        score: Math.floor(Math.random() * 60) + 40,
+        comment: 'Демо-режим: Gemini API ключ не настроен в Edge Function.',
+        breakdown: null, actual_transcription: actualTranscriptionText || 'Demo', model: 'demo'
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
 
     const models = await getGeminiModels()
-    console.log(`Using models: primary=${models.primary}, fallback=${models.fallback}, language=${language}, action=${action || 'score'}`)
+    logRow.primary_model = models.primary
+    logRow.fallback_model = models.fallback
+    logInfo('main', `Models: primary=${models.primary}, fallback=${models.fallback}`)
 
-    // Resolve the transcription hint for this game's language
     const langHint = LANGUAGE_HINTS[language] ?? LANGUAGE_HINTS['ru']
 
-    // ─── Superpower: generate 4 choices ──────────────────────────────────────
+    // ── generate_choices ─────────────────────────────────────────────────────
     if (action === 'generate_choices') {
-      if (!transcription) throw new Error('transcription required for generate_choices')
+      if (!_transcription) throw new Error('transcription required for generate_choices')
+      logInfo('main', `Generating choices for: "${_transcription}"`)
       const langLabel = language === 'ru' ? 'Russian' : 'English'
-      const prompt = `The original phrase is: "${transcription}".
-Generate exactly 4 options for a multiple-choice quiz, in ${langLabel}:
-- 1 option must be the EXACT original phrase (copy it verbatim)
-- 3 options must be plausible-sounding but INCORRECT alternatives (similar phonetically or thematically)
-IMPORTANT: all 4 options MUST be different from each other — no duplicates allowed.
-Respond ONLY with a JSON array of exactly 4 unique strings, randomly shuffled. Example: ["phrase A", "phrase B", "phrase C", "phrase D"]
-No markdown, no explanation, just the JSON array.`
+      const prompt = `The original phrase is: "${_transcription}". Generate exactly 4 options for a multiple-choice quiz, in ${langLabel}:\n- 1 option must be the EXACT original phrase (copy it verbatim)\n- 3 options must be plausible-sounding but INCORRECT alternatives (similar phonetically or thematically)\nIMPORTANT: all 4 options MUST be different from each other — no duplicates allowed.\nRespond ONLY with a JSON array of exactly 4 unique strings, randomly shuffled.\nNo markdown, no explanation, just the JSON array.`
       const choiceReq = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 1.0, maxOutputTokens: 300 } }
-      let choiceData
+      let choiceData: any
       try { choiceData = await callGemini(models.primary, choiceReq) }
       catch { choiceData = await callGemini(models.fallback, choiceReq) }
       const raw = choiceData?.candidates?.[0]?.content?.parts?.[0]?.text || '[]'
       const match = raw.match(/\[[\s\S]*?\]/)
       let choices: string[] = []
       try { choices = JSON.parse(match ? match[0] : '[]') } catch { choices = [] }
-
-      // Dedup: remove any duplicates, keep unique values
-      choices = [...new Set(choices.map((c: string) => String(c).trim()).filter(Boolean))]
-
-      // Ensure the correct answer is in the list
-      if (!choices.includes(transcription)) choices.unshift(transcription)
-
-      // If we still don't have 4 unique choices, pad with distinct fallbacks
-      const fallbacks = [
-        `(вариант А) ${transcription.split(' ').reverse().join(' ')}`,
-        `(вариант Б) ${transcription.slice(0, Math.ceil(transcription.length / 2))}...`,
-        `(вариант В) ...${transcription.slice(Math.floor(transcription.length / 2))}`,
-      ]
-      for (const fb of fallbacks) {
-        if (choices.length >= 4) break
-        if (!choices.includes(fb)) choices.push(fb)
-      }
-      choices = choices.slice(0, 4)
-
-      // Final shuffle
-      choices = choices.sort(() => Math.random() - 0.5)
-      return new Response(JSON.stringify({ choices }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
-    }
-
-
-    // ─── Superpower: generate vision image ───────────────────────────────────
-    if (action === 'generate_vision') {
-      if (!transcription) throw new Error('transcription required for generate_vision')
-      const imageUrl = `${GEMINI_BASE_URL}/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`
-      const prompt = `Create a simple, clear visual illustration that represents this phrase: "${transcription}". Draw it as a visual hint without any text or letters. Style: clean, colorful, simple graphic.`
-      const imageReq = {
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseModalities: ['IMAGE', 'TEXT'], temperature: 0.7 }
-      }
-      let imgData: any
-      try {
-        const imgController = new AbortController()
-        const imgTimer = setTimeout(() => imgController.abort(), 30_000)
-        const res = await fetch(imageUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(imageReq), signal: imgController.signal })
-        clearTimeout(imgTimer)
-        imgData = await res.json()
-      } catch (e: any) {
-        throw new Error(`Image generation failed: ${e.message}`)
-      }
-      // Extract inline image from response
-      const parts = imgData?.candidates?.[0]?.content?.parts || []
-      const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'))
-      if (!imgPart) throw new Error('No image returned from Gemini')
-      return new Response(JSON.stringify({
-        imageBase64: imgPart.inlineData.data,
-        mimeType: imgPart.inlineData.mimeType,
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
-    }
-    // ─── Imaginarium: generate image + 4 choices ─────────────────────────────
-    if (action === 'generate_imaginarium') {
-      if (!_transcription) throw new Error('phrase/transcription required for generate_imaginarium')
-
-      const STYLE_PROMPTS: Record<string, string> = {
-        crazy_dreams:   `surreal dream painting where bizarre dream imagery represents the concept of "${_transcription}". No text or labels. Style: Salvador Dali-inspired dreamscape.`,
-        abstractionism: `abstract expressionist artwork representing the concept of "${_transcription}". Bold shapes, vivid colors, no text. Style: Kandinsky / Mondrian.`,
-        kids_doodles:   `simple child's crayon drawing depicting "${_transcription}". Wobbly lines, bright crayons, naive style. No letters or text.`,
-      }
-
-      const stylePrompt = STYLE_PROMPTS[_imagStyle as string] || STYLE_PROMPTS['abstractionism']
-      const imageUrl = `${GEMINI_BASE_URL}/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`
-      const imageReq = {
-        contents: [{ parts: [{ text: `Create an illustration: ${stylePrompt}` }] }],
-        generationConfig: { responseModalities: ['IMAGE', 'TEXT'], temperature: 0.8 }
-      }
-
-      let imageBase64 = ''
-      let mimeType = 'image/png'
-      try {
-        const imagCtrl = new AbortController()
-        const imagTimer = setTimeout(() => imagCtrl.abort(), 30_000)
-        const res = await fetch(imageUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(imageReq), signal: imagCtrl.signal })
-        clearTimeout(imagTimer)
-        const imgData = await res.json()
-        const parts = imgData?.candidates?.[0]?.content?.parts || []
-        const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'))
-        if (imgPart) {
-          imageBase64 = imgPart.inlineData.data
-          mimeType = imgPart.inlineData.mimeType
-        }
-      } catch (e: any) {
-        console.warn('Image generation failed, continuing without image:', e.message)
-      }
-
-      // Generate 4 choices (1 correct + 3 distractors)
-      const langLabel = language === 'ru' ? 'Russian' : 'English'
-      const choicePrompt = `The original phrase is: "${_transcription}".
-Generate exactly 4 options for a multiple-choice quiz, in ${langLabel}:
-- 1 option must be the EXACT original phrase (copy it verbatim)
-- 3 options must be plausible-sounding but INCORRECT alternatives (similar phonetically or thematically)
-IMPORTANT: all 4 options MUST be different from each other — no duplicates allowed.
-Respond ONLY with a JSON array of exactly 4 unique strings, randomly shuffled. Example: ["phrase A", "phrase B", "phrase C", "phrase D"]
-No markdown, no explanation, just the JSON array.`
-      const choiceReq = { contents: [{ parts: [{ text: choicePrompt }] }], generationConfig: { temperature: 1.0, maxOutputTokens: 300 } }
-      let choices: string[] = []
-      try {
-        let choiceData: any
-        try { choiceData = await callGemini(models.primary, choiceReq) }
-        catch { choiceData = await callGemini(models.fallback, choiceReq) }
-        const raw = choiceData?.candidates?.[0]?.content?.parts?.[0]?.text || '[]'
-        const match = raw.match(/\[[\s\S]*?\]/)
-        try { choices = JSON.parse(match ? match[0] : '[]') } catch { choices = [] }
-      } catch (e: any) {
-        console.warn('Choice generation failed:', e.message)
-      }
-
-      // Dedup and ensure correct answer is present
       choices = [...new Set(choices.map((c: string) => String(c).trim()).filter(Boolean))]
       if (!choices.includes(_transcription)) choices.unshift(_transcription)
       const fallbacks = [
@@ -366,101 +359,182 @@ No markdown, no explanation, just the JSON array.`
         `(вариант Б) ${_transcription.slice(0, Math.ceil(_transcription.length / 2))}...`,
         `(вариант В) ...${_transcription.slice(Math.floor(_transcription.length / 2))}`,
       ]
-      for (const fb of fallbacks) {
-        if (choices.length >= 4) break
-        if (!choices.includes(fb)) choices.push(fb)
-      }
+      for (const fb of fallbacks) { if (choices.length >= 4) break; if (!choices.includes(fb)) choices.push(fb) }
       choices = choices.slice(0, 4).sort(() => Math.random() - 0.5)
-
-      return new Response(JSON.stringify({ imageBase64, mimeType, choices }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+      logInfo('main', `Generated ${choices.length} choices`)
+      logRow.duration_ms = Date.now() - reqStart
+      await persistLog(logRow)
+      return new Response(JSON.stringify({ choices }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
+    // ── generate_vision ──────────────────────────────────────────────────────
+    if (action === 'generate_vision') {
+      if (!_transcription) throw new Error('transcription required for generate_vision')
+      logInfo('main', `Generating vision image for: "${_transcription}"`)
+      const imageUrl = `${GEMINI_BASE_URL}/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`
+      const prompt = `Create a simple, clear visual illustration that represents this phrase: "${_transcription}". Draw it as a visual hint without any text or letters. Style: clean, colorful, simple graphic.`
+      const imageReq = { contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseModalities: ['IMAGE', 'TEXT'], temperature: 0.7 } }
+      let imgData: any
+      try {
+        const ic = new AbortController(); const it = setTimeout(() => ic.abort(), 30_000)
+        const res = await fetch(imageUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(imageReq), signal: ic.signal })
+        clearTimeout(it); imgData = await res.json()
+      } catch (e: any) { throw new Error(`Image generation failed: ${e.message}`) }
+      const parts = imgData?.candidates?.[0]?.content?.parts || []
+      const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'))
+      if (!imgPart) throw new Error('No image returned from Gemini')
+      logRow.duration_ms = Date.now() - reqStart
+      await persistLog(logRow)
+      return new Response(JSON.stringify({ imageBase64: imgPart.inlineData.data, mimeType: imgPart.inlineData.mimeType }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
 
+    // ── generate_imaginarium ─────────────────────────────────────────────────
+    if (action === 'generate_imaginarium') {
+      if (!_transcription) throw new Error('phrase/transcription required for generate_imaginarium')
+      logInfo('main', `Generating imaginarium for: "${_transcription}" style=${_imagStyle}`)
+      const STYLE_PROMPTS: Record<string, string> = {
+        crazy_dreams:   `surreal dream painting where bizarre dream imagery represents the concept of "${_transcription}". No text or labels. Style: Salvador Dali-inspired dreamscape.`,
+        abstractionism: `abstract expressionist artwork representing the concept of "${_transcription}". Bold shapes, vivid colors, no text. Style: Kandinsky / Mondrian.`,
+        kids_doodles:   `simple child's crayon drawing depicting "${_transcription}". Wobbly lines, bright crayons, naive style. No letters or text.`,
+      }
+      const stylePrompt = STYLE_PROMPTS[_imagStyle as string] || STYLE_PROMPTS['abstractionism']
+      const imageUrl = `${GEMINI_BASE_URL}/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`
+      const imageReq = { contents: [{ parts: [{ text: `Create an illustration: ${stylePrompt}` }] }], generationConfig: { responseModalities: ['IMAGE', 'TEXT'], temperature: 0.8 } }
+      let imageBase64 = ''; let mimeType = 'image/png'
+      try {
+        const ic = new AbortController(); const it = setTimeout(() => ic.abort(), 30_000)
+        const res = await fetch(imageUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(imageReq), signal: ic.signal })
+        clearTimeout(it); const imgData = await res.json()
+        const parts = imgData?.candidates?.[0]?.content?.parts || []
+        const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'))
+        if (imgPart) { imageBase64 = imgPart.inlineData.data; mimeType = imgPart.inlineData.mimeType }
+      } catch (e: any) { logWarn('main', `Imaginarium image failed: ${e.message}`) }
+      const langLabel = language === 'ru' ? 'Russian' : 'English'
+      const choicePrompt = `The original phrase is: "${_transcription}". Generate exactly 4 multiple-choice options (1 correct, 3 wrong distractors) in ${langLabel}. Respond ONLY with a JSON array of 4 unique strings.`
+      const choiceReq = { contents: [{ parts: [{ text: choicePrompt }] }], generationConfig: { temperature: 1.0, maxOutputTokens: 300 } }
+      let choices: string[] = []
+      try {
+        let cd: any
+        try { cd = await callGemini(models.primary, choiceReq) } catch { cd = await callGemini(models.fallback, choiceReq) }
+        const raw = cd?.candidates?.[0]?.content?.parts?.[0]?.text || '[]'
+        const match = raw.match(/\[[\s\S]*?\]/)
+        try { choices = JSON.parse(match ? match[0] : '[]') } catch { choices = [] }
+      } catch (e: any) { logWarn('main', `Choice gen failed: ${e.message}`) }
+      choices = [...new Set(choices.map((c: string) => String(c).trim()).filter(Boolean))]
+      if (!choices.includes(_transcription)) choices.unshift(_transcription)
+      const fallbacks2 = [`(вар А) ${_transcription.split(' ').reverse().join(' ')}`, `(вар Б) ${_transcription.slice(0, Math.ceil(_transcription.length / 2))}...`, `(вар В) ...${_transcription.slice(Math.floor(_transcription.length / 2))}`]
+      for (const fb of fallbacks2) { if (choices.length >= 4) break; if (!choices.includes(fb)) choices.push(fb) }
+      choices = choices.slice(0, 4).sort(() => Math.random() - 0.5)
+      logRow.duration_ms = Date.now() - reqStart
+      await persistLog(logRow)
+      return new Response(JSON.stringify({ imageBase64, mimeType, choices }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+
+    // ── only_transcribe mode ─────────────────────────────────────────────────
     if (only_transcribe) {
       if (!originalB64) throw new Error('Missing audio data for transcription')
+      logRow.action = 'transcribe'
       const cleanOrigMime = originalMimeType.split(';')[0]
-      const t = await transcribeAudio(originalB64, cleanOrigMime, langHint, models)
-      return new Response(JSON.stringify({ transcription: t }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+      const t = await transcribeAudio(originalB64, cleanOrigMime, langHint, models, 'original')
+      logRow.original_transcription = t
+      logRow.duration_ms = Date.now() - reqStart
+      await persistLog(logRow)
+      return new Response(JSON.stringify({ transcription: t }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
 
+    // ── Full scoring pipeline ────────────────────────────────────────────────
     if (!originalB64 || !mimicB64) {
-      throw new Error('Missing audio data: need both originalB64 and mimicB64')
-    }
-
-    if (!GEMINI_API_KEY) {
-      return new Response(JSON.stringify({
-        score: Math.floor(Math.random() * 60) + 40,
-        comment: 'Демо-режим: Gemini API ключ не настроен в Edge Function.',
-        breakdown: null,
-        actual_transcription: actualTranscriptionText || 'Demo original',
-        model: 'demo'
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
+      throw new Error(`Missing audio data: originalB64=${!!originalB64}, mimicB64=${!!mimicB64}`)
     }
 
     const cleanOrigMime = originalMimeType.split(';')[0]
     const cleanMimicMime = mimicMimeType.split(';')[0]
 
-    console.log('Transcribing audio...')
+    // Step 1: Transcribe
+    logInfo('main', 'Step 1: Transcribing audio...')
     let originalTranscription = actualTranscriptionText
     let attemptTranscription = ''
+    let errorStage = ''
 
-    if (actualTranscriptionText) {
-      // Keep confirmed transcription, only transcribe the mimic attempt
-      console.log('Using provided actual transcription:', actualTranscriptionText)
-      attemptTranscription = await transcribeAudio(mimicB64, cleanMimicMime, langHint, models)
-    } else {
-      [originalTranscription, attemptTranscription] = await Promise.all([
-        transcribeAudio(originalB64, cleanOrigMime, langHint, models),
-        transcribeAudio(mimicB64, cleanMimicMime, langHint, models),
-      ])
+    try {
+      if (actualTranscriptionText) {
+        logInfo('main', `Using provided actual transcription: "${actualTranscriptionText}"`)
+        attemptTranscription = await transcribeAudio(mimicB64, cleanMimicMime, langHint, models, 'mimic')
+      } else {
+        logInfo('main', 'Transcribing both original and mimic in parallel...')
+        ;[originalTranscription, attemptTranscription] = await Promise.all([
+          transcribeAudio(originalB64, cleanOrigMime, langHint, models, 'original'),
+          transcribeAudio(mimicB64, cleanMimicMime, langHint, models, 'mimic'),
+        ])
+      }
+    } catch (e: any) {
+      errorStage = 'transcription'
+      logError('main', `Transcription step failed: ${e.message}`)
+      throw e
     }
 
-    console.log('Original:', originalTranscription)
-    console.log('Attempt:', attemptTranscription)
+    logInfo('main', `Transcriptions complete | original="${originalTranscription.slice(0, 60)}" | attempt="${attemptTranscription.slice(0, 60)}"`)
+    logRow.original_transcription = originalTranscription.slice(0, 200)
+    logRow.attempt_transcription = attemptTranscription.slice(0, 200)
 
-    // Step 2: compare transcriptions + written guess
+    // Step 2: Compare
+    logInfo('main', 'Step 2: Compare + score...')
     const compareReq = buildCompareRequest(originalTranscription, attemptTranscription, guestGuessText)
-    let compareData
+    let compareData: any
     let usedModel = models.primary
     try {
       compareData = await callGemini(models.primary, compareReq)
     } catch (primaryErr: any) {
-      console.warn('Primary model failed on compare, trying fallback:', primaryErr.message)
+      logWarn('main', `Primary model ${models.primary} failed on compare: ${primaryErr.message} → trying fallback`)
+      errorStage = 'compare_primary'
       usedModel = models.fallback
       compareData = await callGemini(models.fallback, compareReq)
     }
 
-    const result = parseCompareResponse(compareData)
-    if (result) {
-      return new Response(JSON.stringify({
-        score: result.score,
-        comment: result.comment,
-        breakdown: result.breakdown,
-        actual_transcription: originalTranscription,
-        attempt_transcription: attemptTranscription,
-        model: usedModel,
-      }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      })
-    }
+    logRow.used_model = usedModel
 
-    throw new Error('Failed to parse compare response')
+    const result = parseCompareResponse(compareData)
+    if (!result) throw new Error('Failed to parse compare response from Gemini')
+
+    logInfo('main', `Final result: score=${result.score}, model=${usedModel} | total=${Date.now() - reqStart}ms`)
+
+    logRow.score = result.score
+    logRow.has_comment = !!result.comment
+    logRow.has_breakdown = !!result.breakdown
+    logRow.status = errorStage ? 'fallback' : 'ok'
+    logRow.error_stage = errorStage || null
+    logRow.duration_ms = Date.now() - reqStart
+    await persistLog(logRow)
+
+    return new Response(JSON.stringify({
+      score: result.score,
+      comment: result.comment,
+      breakdown: result.breakdown,
+      actual_transcription: originalTranscription,
+      attempt_transcription: attemptTranscription,
+      model: usedModel,
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
 
   } catch (error: any) {
-    console.error('Scoring error:', error.message)
+    const duration = Date.now() - reqStart
+    const isTimeout = error.message?.startsWith('TIMEOUT:')
+    logError('main', `Unhandled error after ${duration}ms: ${error.message}`)
+
+    logRow.status = isTimeout ? 'timeout' : 'error'
+    logRow.error_message = error.message?.slice(0, 500)
+    logRow.duration_ms = duration
+    logRow.score = 50
+    await persistLog(logRow)
+
     return new Response(JSON.stringify({
       score: 50,
-      comment: `Ошибка AI: ${error.message}. Поставлена приближённая оценка.`,
+      comment: isTimeout
+        ? `AI не успел ответить (${Math.round(duration / 1000)}с). Поставлена оценка 50.`
+        : `Ошибка AI: ${error.message?.slice(0, 200)}. Поставлена приближённая оценка.`,
       breakdown: null,
       actual_transcription: null,
-      model: 'fallback'
+      model: 'fallback',
+      _debug: { error: error.message, duration_ms: duration, status: logRow.status }
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 200
