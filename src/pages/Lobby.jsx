@@ -79,11 +79,13 @@ export default function Lobby() {
     if (manual) {
       setRefreshing(true)
 
-      // Safety: if refresh takes more than 5s — force full page reload
+      // Safety: if refresh takes more than 5s — soft-recovery (no reload)
       if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current)
       refreshTimeoutRef.current = setTimeout(() => {
-        devWarn('[Lobby] Refresh timed out after 5s — forcing page reload')
-        window.location.reload()
+        devWarn('[Lobby] Refresh timed out after 5s — soft recovery')
+        setRefreshing(false)
+        toast.error('Загрузка зависла. Попробуем ещё раз...')
+        fetchRoomsRef.current?.()
       }, 5000)
 
       devLog('Manual refresh: refreshing Supabase auth session...')
@@ -150,9 +152,10 @@ export default function Lobby() {
       }
     } catch (e) {
       if (e.message === 'FETCH_TIMEOUT') {
-        devWarn('[Lobby] DB query timed out after 8s — forcing page reload')
-        window.location.reload()
-        return // stop execution, page is reloading
+        devWarn('[Lobby] DB query timed out after 8s — soft recovery')
+        setFetchError('Сервер не отвечает. Проверьте соединение.')
+        setLoading(false)
+        return
       }
       devError('Caught unhandled error in fetchRooms:', e)
       setFetchError(e.message || 'Ошибка загрузки комнат')
@@ -181,12 +184,14 @@ export default function Lobby() {
   // Keep ref in sync
   useEffect(() => { fetchRoomsRef.current = fetchRooms }, [fetchRooms])
 
-  // ── Watchdog: if loading is still true after 10s, force a page reload ──
+  // ── Watchdog: if loading stays true after 10s, soft-recovery (no reload) ──
   useEffect(() => {
     if (!loading) return
     const watchdog = setTimeout(() => {
-      devWarn('[Lobby] Stuck loading after 10s — forcing page reload')
-      window.location.reload()
+      devWarn('[Lobby] Stuck loading after 10s — soft recovery')
+      setLoading(false)
+      setFetchError('Загрузка зависла. Попробуйте обновить вручную.')
+      fetchRoomsRef.current?.()
     }, 10_000)
     return () => clearTimeout(watchdog)
   }, [loading])
@@ -211,8 +216,14 @@ export default function Lobby() {
       })
       .subscribe((status) => {
         devLog('Channel status:', status)
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          devWarn('Realtime channel error, relying on polling:', status)
+        if (status === 'SUBSCRIBED') {
+          // Sync on initial subscribe and on reconnect after an error
+          devLog('Channel SUBSCRIBED — syncing rooms')
+          fetchRoomsRef.current?.()
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          devWarn('Realtime channel error — immediate soft recovery:', status)
+          // Immediately re-fetch so users don't wait for the 10s poll
+          fetchRoomsRef.current?.()
         }
       })
 

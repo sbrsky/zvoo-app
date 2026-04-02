@@ -8,6 +8,7 @@ export function useRoom(roomId, userId) {
   const [gameSession, setGameSession] = useState(null)
   const [gameState, setGameState] = useState(null)
   const [error, setError] = useState(null)
+  const [wsStatus, setWsStatus] = useState('CONNECTING') // reactive mirror of channelStatusRef
   const channelRef = useRef(null)
   const channelStatusRef = useRef('CLOSED') // track live channel status
   const joiningRef = useRef(false)
@@ -115,6 +116,7 @@ export function useRoom(roomId, userId) {
       })
       .subscribe((status) => {
         channelStatusRef.current = status
+        setWsStatus(status) // reactive — triggers NetworkBanner re-render
         if (status === 'SUBSCRIBED') {
           // Successfully subscribed — reset backoff counter
           reconnectAttemptsRef.current = 0
@@ -315,6 +317,7 @@ export function useRoom(roomId, userId) {
 
   return {
     room, gameSession, gameState, error, isHost, isGuest, sessionCreatedRef,
+    wsStatus, reconnectAttempts: reconnectAttemptsRef.current,
     broadcastState, joinRoom, closeRoom, createSession, updateSession, updateRoom, updateRoomStatus, fetchRoom, fetchGameSession
   }
 }

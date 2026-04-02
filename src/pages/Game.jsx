@@ -5,6 +5,7 @@ import { useRoom } from '../hooks/useRoom'
 import { useAudioEngine, MAX_RECORDING_SECONDS } from '../hooks/useAudioEngine'
 import { supabase } from '../lib/supabase'
 import { GAME_EVENTS, ROOM_STATUS, GAME_TYPES } from '../lib/constants'
+import { PHASES, PHASE_ORDER, ACTIVE_GAME_PHASES, inferPhaseFromSession } from '../lib/gamePhases'
 import { scoreWithGemini, isGeminiAvailable, transcribeHostAudio } from '../lib/geminiScoring'
 import PlayerCard from '../components/PlayerCard'
 import AudioVisualizer from '../components/AudioVisualizer'
@@ -15,6 +16,7 @@ import { playNotification } from '../lib/sounds'
 import { launchConfetti } from '../lib/confetti'
 import { hapticLight, hapticHeavy, hapticSuccess, hapticError } from '../lib/haptic'
 import { SUPERPOWERS, SUPERPOWER_MAP, supportsPlaybackRate } from '../lib/superpowers'
+import { NetworkBanner } from '../components/NetworkBanner'
 
 // AI Thinking quips — rotated every 2.5s during scoring
 const AI_QUIPS = [
@@ -26,21 +28,7 @@ const AI_QUIPS = [
   '🤔 сопоставляю фонемы...',
 ]
 
-const PHASES = {
-  WAITING:        'waiting',
-  READY:          'ready',          // guest joined, host can press Start
-  HOST_RECORD:    'host_record',    // recorder records a phrase
-  HOST_VERIFY:    'host_verify',    // recorder verifies the AI transcription
-  GUEST_LISTEN:   'guest_listen',   // guesser listens to reversed audio
-  GUEST_MIMIC:    'guest_mimic',    // guesser mimics the reversed audio
-  GUEST_GUESS:    'guest_guess',    // guesser types their guess
-  IMAG_GENERATE:  'imag_generate',  // [Imaginarium] host generating image
-  IMAG_GUESS:     'imag_guess',     // [Imaginarium] guest sees image + 4 choices
-  SCORING:        'scoring',        // AI scoring in progress
-  RESULTS:        'results',        // single-round results (legacy compat)
-  ROUND_RESULTS:  'round_results',  // between-round score display
-  FINAL_RESULTS:  'final_results',  // game over, cumulative scores
-}
+// PHASES is imported from '../lib/gamePhases'
 
 const PHASE_STEPS = [
   { key: PHASES.HOST_RECORD,  label: 'Запись',    icon: '🎙️' },
@@ -640,28 +628,57 @@ export default function Game() {
     }
   }, [gameState, isHost, isRecorder, isGuesser])
 
-  // Fallback: if stuck on SCORING phase, poll DB for results
+  // ─── Universal Phase Recovery Polling ────────────────────────────────────
+  // Fires every 5s during any active game phase.
+  // Uses inferPhaseFromSession (DB-based) + monotonic check so we NEVER roll back.
+  // Covers missed broadcasts for: AUDIO_READY, HOST_VERIFIED, MIMIC_DONE, SHOW_RESULT, etc.
   useEffect(() => {
-    if (phase !== PHASES.SCORING || !roomId) return
+    if (!ACTIVE_GAME_PHASES.has(phase) || !roomId) return
+
     const pollInterval = setInterval(async () => {
       try {
         const { data: session } = await supabase
-          .from('game_sessions').select('ai_score, ai_comment, ai_actual_transcription, guest_guess_text, manual_score, round_number').eq('room_id', roomId)
-          .order('created_at', { ascending: false }).limit(1).maybeSingle()
-        if (session?.ai_score != null) {
-          setScore(session.ai_score)
-          setComment(session.ai_comment || '')
-          setActualTranscription(session.ai_actual_transcription || '')
-          if (session.guest_guess_text) setGuestGuessText(session.guest_guess_text)
-          if (session.manual_score) setManualScore(session.manual_score)
-          const newEntry = { round: session.round_number || currentRound, score: session.ai_score, comment: session.ai_comment || '' }
-          setRoundScores(prev => [...prev, newEntry])
-          const isLastRound = (session.round_number || currentRound) >= totalRounds
-          setPhase(isLastRound ? PHASES.FINAL_RESULTS : PHASES.ROUND_RESULTS)
-          clearInterval(pollInterval)
+          .from('game_sessions')
+          .select('reversed_audio_url, ai_actual_transcription, mimic_audio_url, guest_guess_text, ai_score, ai_comment, ai_actual_transcription, manual_score, round_number')
+          .eq('room_id', roomId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        if (!session) return
+
+        const dbPhase   = inferPhaseFromSession(session, totalRounds, currentRound)
+        const dbIdx     = PHASE_ORDER[dbPhase]   ?? -1
+        const localIdx  = PHASE_ORDER[phase]     ?? -1
+
+        // Monotonic: only advance forward, never roll back
+        if (dbIdx > localIdx) {
+          console.log(`[PhaseRecovery] DB=${dbPhase} (${dbIdx}) > local=${phase} (${localIdx}) — recovering`)
+
+          // Hydrate state needed by the new phase before switching
+          if (session.ai_actual_transcription) setActualTranscription(session.ai_actual_transcription)
+          if (session.guest_guess_text)         setGuestGuessText(session.guest_guess_text)
+          if (session.ai_score != null) {
+            setScore(session.ai_score)
+            setComment(session.ai_comment || '')
+            if (session.manual_score) setManualScore(session.manual_score)
+            const newEntry = {
+              round:   session.round_number || currentRound,
+              score:   session.ai_score,
+              comment: session.ai_comment || '',
+            }
+            setRoundScores(prev => {
+              // Avoid duplicate round entries
+              const exists = prev.some(e => e.round === newEntry.round)
+              return exists ? prev : [...prev, newEntry]
+            })
+          }
+
+          setPhase(dbPhase)
         }
-      } catch { /* ignore */ }
+      } catch { /* ignore polling errors silently */ }
     }, 5000)
+
     return () => clearInterval(pollInterval)
   }, [phase, roomId, currentRound, totalRounds])
 
@@ -1505,6 +1522,9 @@ export default function Game() {
 
   return (
     <div style={{ minHeight: '100vh', padding: '88px 20px 60px', maxWidth: '1100px', margin: '0 auto' }}>
+
+      {/* ─── WebSocket health banner ─── */}
+      <NetworkBanner wsStatus={wsStatus} />
 
       {/* ─── AI Vision fullscreen loader overlay ─── */}
       {visionLoading && (
