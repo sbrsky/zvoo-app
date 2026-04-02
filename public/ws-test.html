@@ -223,9 +223,9 @@ async function checkRest() {
       headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY }
     })
     const ms = Date.now()-t0
-    if (r.ok || r.status === 200 || r.status === 404) {
+    if (r.ok || r.status === 200 || r.status === 404 || r.status === 401) {
       setDot('rest', 'ok', `${r.status} — ${ms}ms`)
-      log(`REST health: HTTP ${r.status} in ${ms}ms`, 'ok')
+      log(`REST health: HTTP ${r.status} in ${ms}ms ${r.status===401 ? '(401=normal, server alive)' : ''}`, 'ok')
       setSum('rest', '✅', true)
     } else {
       setDot('rest', 'error', `HTTP ${r.status}`)
@@ -286,7 +286,6 @@ async function checkRawWs() {
       ws = new WebSocket(WS_URL)
       ws.onopen = () => {
         const ms = Date.now()-t0
-        clearTimeout(timeout)
         setDot('wsconn', 'ok', `connected ${ms}ms`)
         log(`✅ Raw WS opened in ${ms}ms`, 'ok')
         setSum('ttc', ms+'', true)
@@ -323,12 +322,13 @@ async function checkRawWs() {
               ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: '2' }))
               setDot('wsping', 'running', '...')
             }
-          } else if (msg.event === 'phx_reply' && msg.topic === 'phoenix' && !heartbeatSent === false) {
-            // Heartbeat PONG — stop here
+          } else if (msg.event === 'phx_reply' && msg.topic === 'phoenix' && heartbeatSent === true) {
+            // Heartbeat PONG — stop here, test complete
+            heartbeatSent = false // prevent re-entry
             setDot('wsping', 'ok', 'pong received')
             log(`✅ Heartbeat PONG received — WS fully functional`, 'ok')
             clearTimeout(timeout)
-            ws.close(1000, 'diagnostic complete')
+            setTimeout(() => ws.close(1000, 'diagnostic complete'), 100)
             resolve(true)
           } else if (msg.event === 'phx_error' || (msg.payload?.status && msg.payload.status !== 'ok')) {
             log(`⚠️ Channel error: ${JSON.stringify(msg.payload)}`, 'warn')
