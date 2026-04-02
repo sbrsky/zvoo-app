@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { GAME_EVENTS, ROOM_STATUS } from '../lib/constants'
 import offlineQueue from '../lib/offlineQueue'
+import { wsLog } from '../lib/wsLogger'
 
 // Max reconnect attempts before we give up (show banner, let user decide)
 const MAX_RECONNECT_ATTEMPTS = 5
@@ -32,6 +33,8 @@ export function useRoom(roomId, userId) {
     if (!roomId || !userId) return
 
     fetchRoom()
+
+    wsLog('SUBSCRIBE_INIT', { roomId, userId: userId?.slice(0, 8) })
     subscribeToRoom()
 
     // Re-subscribe on tab visibility — with a 2s debounce to avoid race with backoff
@@ -43,16 +46,17 @@ export function useRoom(roomId, userId) {
         if (status === 'CHANNEL_ERROR' || status === 'CLOSED') {
           if (visibilityTimer) clearTimeout(visibilityTimer)
           visibilityTimer = setTimeout(() => {
-            // Double-check status hasn't recovered on its own
             if (channelStatusRef.current !== 'SUBSCRIBED') {
+              wsLog('VISIBILITY_RECONNECT', { status: channelStatusRef.current, roomId })
               console.log('[useRoom] Tab visible, channel still down — reconnecting')
-              // Cancel any in-flight backoff timer first
               if (reconnectTimerRef.current) {
                 clearTimeout(reconnectTimerRef.current)
                 reconnectTimerRef.current = null
               }
               if (channelRef.current) supabase.removeChannel(channelRef.current)
               subscribeToRoom()
+            } else {
+              wsLog('VISIBILITY_OK', { status: 'SUBSCRIBED', roomId })
             }
           }, 2000)
         }
@@ -77,13 +81,14 @@ export function useRoom(roomId, userId) {
   // (e.g. guest joining) is still discovered without needing to reload.
   function startDbPolling() {
     if (dbPollIntervalRef.current) return // already running
-    console.log('[useRoom] Starting DB polling fallback (WS down)')
+    wsLog('DB_POLL_START', { roomId, interval: 5000 })
+    console.log('[useRoom] 🔄 Starting DB polling fallback (WS down)')
     dbPollIntervalRef.current = setInterval(() => {
       if (channelStatusRef.current === 'SUBSCRIBED') {
-        // WS recovered — stop polling
         stopDbPolling()
         return
       }
+      wsLog('DB_POLL_TICK', { status: channelStatusRef.current })
       fetchRoom()
     }, 5000)
   }
@@ -92,7 +97,8 @@ export function useRoom(roomId, userId) {
     if (dbPollIntervalRef.current) {
       clearInterval(dbPollIntervalRef.current)
       dbPollIntervalRef.current = null
-      console.log('[useRoom] DB polling stopped (WS healthy)')
+      wsLog('DB_POLL_STOP', { reason: 'WS_HEALTHY' })
+      console.log('[useRoom] ✅ DB polling stopped (WS healthy)')
     }
   }
 
@@ -119,13 +125,18 @@ export function useRoom(roomId, userId) {
   function subscribeToRoom() {
     // Defensive: never create a second channel if one is connecting
     if (channelRef.current && channelStatusRef.current === 'CONNECTING') {
+      wsLog('DUPLICATE_SUBSCRIBE_BLOCKED', { roomId })
       console.log('[useRoom] Already connecting — skipping duplicate subscribe')
       return
     }
 
-    const channel = supabase.channel(`room:${roomIdRef.current}`, {
+    const channelName = `room:${roomIdRef.current}`
+    wsLog('CONNECTING', { channel: channelName, attempt: reconnectAttemptsRef.current })
+    console.log(`[useRoom] Creating channel ${channelName} (attempt ${reconnectAttemptsRef.current})...`)
+    const channel = supabase.channel(channelName, {
       config: { broadcast: { self: true } }
     })
+
 
     channel
       .on(
@@ -151,9 +162,21 @@ export function useRoom(roomId, userId) {
       .on('broadcast', { event: 'game_state' }, ({ payload }) => {
         setGameState(payload)
       })
-      .subscribe((status) => {
+      .subscribe((status, err) => {
+        const prev = channelStatusRef.current
         channelStatusRef.current = status
         setWsStatus(status)
+
+        // Log every status transition with full context
+        wsLog(status, {
+          room: roomIdRef.current?.slice(0, 8),
+          prev,
+          attempt: reconnectAttemptsRef.current,
+          online: navigator.onLine,
+          visible: document.visibilityState,
+          err: err?.message ?? err ?? null,
+        })
+        console.log(`[useRoom] WS状态: ${prev} → ${status}`, err ? `| err=${err?.message ?? err}` : '')
 
         if (status === 'SUBSCRIBED') {
           reconnectAttemptsRef.current = 0
@@ -168,14 +191,16 @@ export function useRoom(roomId, userId) {
 
           // Give up after MAX attempts — show banner, let user act
           if (attempt >= MAX_RECONNECT_ATTEMPTS) {
-            console.error(`[useRoom] Channel failed after ${attempt} attempts — giving up. User may need to reload.`)
+            wsLog('GIVING_UP', { attempt, roomId: roomIdRef.current?.slice(0, 8) })
+            console.error(`[useRoom] ❌ Channel failed after ${attempt} attempts — DB polling active, WS giving up`)
             return
           }
 
           // Exponential backoff: 3s, 6s, 12s, 24s, 30s cap
           const delay = Math.min(3000 * Math.pow(2, attempt), 30000)
           reconnectAttemptsRef.current = attempt + 1
-          console.warn(`[useRoom] Channel ${status} — reconnecting in ${delay}ms (attempt ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS})`)
+          wsLog('RECONNECT_SCHEDULED', { delay, attempt: attempt + 1, roomId: roomIdRef.current?.slice(0, 8) })
+          console.warn(`[useRoom] ⚠️ Channel ${status} — reconnecting in ${delay}ms (attempt ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS})`)
 
           if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current)
           reconnectTimerRef.current = setTimeout(() => {

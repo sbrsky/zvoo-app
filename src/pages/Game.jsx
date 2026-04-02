@@ -1525,7 +1525,8 @@ export default function Game() {
     <div style={{ minHeight: '100vh', padding: '88px 20px 60px', maxWidth: '1100px', margin: '0 auto' }}>
 
       {/* ─── WebSocket health banner ─── */}
-      <NetworkBanner wsStatus={wsStatus} />
+      <NetworkBanner wsStatus={wsStatus} onReload={fetchRoom} />
+
 
       {/* ─── AI Vision fullscreen loader overlay ─── */}
       {visionLoading && (
@@ -1811,27 +1812,45 @@ export default function Game() {
                       {copied ? '✅ Скопировано' : '📋 Копировать'}
                     </button>
                   </div>
-                  {/* Host leave / close room */}
-                  <button
-                    onClick={async () => {
-                      try {
-                        await closeRoom()
-                      } catch (err) {
-                        console.error('Не удалось закрыть комнату:', err.message)
-                      }
-                      navigate('/lobby')
-                    }}
-                    style={{
-                      padding: '10px 22px', borderRadius: '12px', border: '1px solid rgba(239,68,68,0.25)',
-                      background: 'rgba(239,68,68,0.08)',
-                      color: 'rgba(239,68,68,0.7)', fontWeight: 600, fontSize: '13px',
-                      cursor: 'pointer', transition: 'all 0.2s',
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(239,68,68,0.15)'; e.currentTarget.style.color = '#EF4444' }}
-                    onMouseLeave={e => { e.currentTarget.style.background = 'rgba(239,68,68,0.08)'; e.currentTarget.style.color = 'rgba(239,68,68,0.7)' }}
-                  >
-                    🚪 Закрыть комнату
-                  </button>
+                  {/* Refresh + Host leave / close room */}
+                  <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => { fetchRoom(); fetch && fetch() }}
+                      title="Обновить состояние комнаты"
+                      style={{
+                        padding: '10px 18px', borderRadius: '12px',
+                        border: '1px solid rgba(77,217,200,0.3)',
+                        background: 'rgba(77,217,200,0.08)',
+                        color: 'rgba(77,217,200,0.8)', fontWeight: 600, fontSize: '13px',
+                        cursor: 'pointer', transition: 'all 0.2s',
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(77,217,200,0.15)'; e.currentTarget.style.color = '#4DD9C8' }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(77,217,200,0.08)'; e.currentTarget.style.color = 'rgba(77,217,200,0.8)' }}
+                    >
+                      🔄 Обновить
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await closeRoom()
+                        } catch (err) {
+                          console.error('Не удалось закрыть комнату:', err.message)
+                        }
+                        navigate('/lobby')
+                      }}
+                      style={{
+                        padding: '10px 22px', borderRadius: '12px', border: '1px solid rgba(239,68,68,0.25)',
+                        background: 'rgba(239,68,68,0.08)',
+                        color: 'rgba(239,68,68,0.7)', fontWeight: 600, fontSize: '13px',
+                        cursor: 'pointer', transition: 'all 0.2s',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(239,68,68,0.15)'; e.currentTarget.style.color = '#EF4444' }}
+                      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(239,68,68,0.08)'; e.currentTarget.style.color = 'rgba(239,68,68,0.7)' }}
+                    >
+                      🚪 Закрыть комнату
+                    </button>
+                  </div>
                 </>
               )}
             </div>
