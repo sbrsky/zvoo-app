@@ -258,6 +258,8 @@ export default function Game() {
   const [manualScore, setManualScore] = useState(null)
   const [showCancelModal, setShowCancelModal] = useState(false)
   const [uploadTimedOut, setUploadTimedOut] = useState(false)
+  const [scoringTimedOut, setScoringTimedOut] = useState(false) // true if AI took too long
+  const [scoringSlowAlert, setScoringSlowAlert] = useState(false) // true if scoring took > 30s
 
   // Button pending states (prevent double-click, show spinner)
   const [pendingHostStart, setPendingHostStart] = useState(false)
@@ -304,9 +306,23 @@ export default function Game() {
   useEffect(() => {
     if (phase !== PHASES.SCORING) return
     setAiQuipIdx(0)
+    setScoringTimedOut(false)
+    setScoringSlowAlert(false)
     const t = setInterval(() => setAiQuipIdx(i => (i + 1) % AI_QUIPS.length), 2500)
-    return () => clearInterval(t)
-  }, [phase])
+    // After 30s: show slow alert + retry button
+    const slowTimer = setTimeout(() => setScoringSlowAlert(true), 30_000)
+    // Safety: auto-exit SCORING after 70s (Gemini sometimes hangs permanently)
+    const safetyTimer = setTimeout(() => {
+      console.warn('[Game] SCORING safety timeout hit — forcing ROUND_RESULTS')
+      setScoringTimedOut(true)
+      setScoring(false)
+      setScore(prev => prev ?? 50)
+      setComment(prev => prev || 'AI не ответил вовремя. Поставлена оценка 50.')
+      const isLastRound = currentRound >= totalRounds
+      setPhase(isLastRound ? PHASES.FINAL_RESULTS : PHASES.ROUND_RESULTS)
+    }, 70_000)
+    return () => { clearInterval(t); clearTimeout(slowTimer); clearTimeout(safetyTimer) }
+  }, [phase]) // eslint-disable-line
 
   // Round transition flash
   const [showRoundFlash, setShowRoundFlash] = useState(false)
@@ -903,7 +919,7 @@ export default function Game() {
         await withTimeout(updateSession({ original_audio_url: originalUrl, reversed_audio_url: reversedUrl }))
         
         // Transcribe original audio
-        setPhase(PHASES.SCORING) // show some loading state
+        // Transcription progress is shown via the FakeProgressBar
         const transcription = await withTimeout(transcribeHostAudio(recordedBlob, room?.game_language || 'ru'))
         
         if (transcription) {
@@ -921,6 +937,7 @@ export default function Game() {
     } catch (err) {
       console.error('doProcessHost error:', err)
       setUploadTimedOut(true) // catches both real errors and our TIMEOUT sentinel
+      setPhase(PHASES.HOST_RECORD)
     } finally {
       setUploading(false)
     }
@@ -1174,32 +1191,57 @@ export default function Game() {
 
 
 
+  const SCORING_TIMEOUT_MS = 45_000
+
   const triggerScoring = async () => {
     setScoring(true)
+    setScoringTimedOut(false)
     let finalScore = 50
+    let finalComment = ''
+    const t0 = Date.now()
+    const log = (msg) => console.log(`[triggerScoring +${((Date.now()-t0)/1000).toFixed(1)}s] ${msg}`)
     try {
+      log('Fetching game session from DB...')
       const { data: session } = await supabase
         .from('game_sessions').select('*').eq('room_id', roomId)
         .order('created_at', { ascending: false }).limit(1).maybeSingle()
-      if (!session) return
+      if (!session) {
+        log('ERROR: No session found in DB')
+        return
+      }
+      log(`Session found. original_audio_url=${!!session.original_audio_url}, mimic_reversed_url=${!!session.mimic_reversed_url}, guest_guess_text='${session.guest_guess_text}'`)
 
       // Download original and mimic_reversed audio for comparison
       let originalBlob = null
       let mimicReversedBlob = null
 
       if (session.original_audio_url) {
+        log('Downloading original audio...')
         const { data } = await supabase.storage.from('audio').download(session.original_audio_url)
-        if (data) originalBlob = data
+        if (data) { originalBlob = data; log(`Original audio downloaded: ${data.size} bytes`) }
+        else log('WARNING: original audio download returned no data')
+      } else {
+        log('WARNING: original_audio_url is null in session')
       }
       if (session.mimic_reversed_url) {
+        log('Downloading mimic_reversed audio...')
         const { data } = await supabase.storage.from('audio').download(session.mimic_reversed_url)
-        if (data) mimicReversedBlob = data
+        if (data) { mimicReversedBlob = data; log(`Mimic reversed audio downloaded: ${data.size} bytes`) }
+        else log('WARNING: mimic_reversed audio download returned no data')
+      } else {
+        log('WARNING: mimic_reversed_url is null in session — guest may not have uploaded yet')
       }
 
       if (originalBlob && mimicReversedBlob && isGeminiAvailable()) {
-        // Real Gemini AI scoring
-        const result = await scoreWithGemini(originalBlob, mimicReversedBlob, session.guest_guess_text, session.ai_actual_transcription, room?.game_language || 'ru')
+        // Real Gemini AI scoring — with explicit timeout
+        log('Starting Gemini AI scoring...')
+        const result = await withTimeout(
+          scoreWithGemini(originalBlob, mimicReversedBlob, session.guest_guess_text, session.ai_actual_transcription, room?.game_language || 'ru'),
+          SCORING_TIMEOUT_MS
+        )
+        log(`Gemini scoring complete. score=${result.score}, model=${result.model}`)
         finalScore = result.score
+        finalComment = result.comment
         await updateSession({ 
           ai_score: result.score, 
           ai_comment: result.comment,
@@ -1214,18 +1256,22 @@ export default function Game() {
           guestGuessText: session.guest_guess_text,
           roundNumber: currentRound
         })
-        setScore(result.score); 
-        setComment(result.comment); 
-        setBreakdown(result.breakdown);
-        setActualTranscription(result.actual_transcription || null);
-        setAttemptTranscription(result.attempt_transcription || null);
-        if (session.guest_guess_text) setGuestGuessText(session.guest_guess_text);
+        setScore(result.score)
+        setComment(result.comment)
+        setBreakdown(result.breakdown)
+        setActualTranscription(result.actual_transcription || null)
+        setAttemptTranscription(result.attempt_transcription || null)
+        if (session.guest_guess_text) setGuestGuessText(session.guest_guess_text)
       } else {
         // Demo fallback
-        finalScore = Math.floor(Math.random() * 60) + 40
         const reason = !isGeminiAvailable()
           ? 'Демо-режим: Gemini API ключ не настроен.'
+          : !originalBlob ? 'Ошибка: оригинальное аудио недоступно.'
+          : !mimicReversedBlob ? 'Ошибка: аудио гостя недоступно (возможно ещё загружается).'
           : 'Не удалось загрузить аудио для сравнения.'
+        log(`Fallback scoring reason: ${reason}`)
+        finalScore = Math.floor(Math.random() * 60) + 40
+        finalComment = reason
         await updateSession({ ai_score: finalScore, ai_comment: reason })
         broadcastState(GAME_EVENTS.SHOW_RESULT, { 
           score: finalScore, 
@@ -1233,26 +1279,33 @@ export default function Game() {
           guestGuessText: session.guest_guess_text,
           roundNumber: currentRound
         })
-        setScore(finalScore); 
-        setComment(reason);
-        if (session.guest_guess_text) setGuestGuessText(session.guest_guess_text);
+        setScore(finalScore)
+        setComment(reason)
+        if (session.guest_guess_text) setGuestGuessText(session.guest_guess_text)
       }
 
       // Only finish game after the last round
       const isLastRound = currentRound >= totalRounds
       if (isLastRound) {
+        log('Last round — finalizing game...')
         await updateRoomStatus(ROOM_STATUS.FINISHED)
         await finalizeGame(finalScore)
+        log('Game finalized.')
       }
-       // Profile stats updated at game end only (finalizeGame called above)
     } catch (err) {
-      console.error('Scoring failed:', err)
-      const fb = 50
-      broadcastState(GAME_EVENTS.SHOW_RESULT, { score: fb, comment: `Ошибка AI: ${err.message}`, roundNumber: currentRound })
-      setScore(fb); setComment(`Ошибка AI: ${err.message}`)
+      const isTimeout = err.message === 'TIMEOUT'
+      console.error(`[triggerScoring] ${isTimeout ? 'TIMED OUT' : 'FAILED'}:`, err)
+      finalScore = 50
+      finalComment = isTimeout
+        ? 'AI не ответил вовремя (45с). Поставлена оценка 50.'
+        : `Ошибка AI: ${err.message}`
+      broadcastState(GAME_EVENTS.SHOW_RESULT, { score: finalScore, comment: finalComment, roundNumber: currentRound })
+      setScore(finalScore)
+      setComment(finalComment)
     } finally {
+      log('Scoring complete — transitioning phase')
       setScoring(false)
-      const newEntry = { round: currentRound, score: finalScore, comment: comment }
+      const newEntry = { round: currentRound, score: finalScore, comment: finalComment }
       setRoundScores(prev => [...prev, newEntry])
       const isLastRound = currentRound >= totalRounds
       setPhase(isLastRound ? PHASES.FINAL_RESULTS : PHASES.ROUND_RESULTS)
@@ -2302,8 +2355,31 @@ export default function Game() {
                   }} />
                 ))}
               </div>
+              {/* Show slow alert + retry button after 30s */}
+              {scoringSlowAlert && (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+                  <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)' }}>
+                    AI думает дольше обычного...
+                  </div>
+                  {isGuesser && (
+                    <button
+                      onClick={() => triggerScoring()}
+                      style={{
+                        padding: '8px 18px', borderRadius: '12px',
+                        border: '1px solid rgba(167,139,250,0.35)',
+                        background: 'rgba(124,58,237,0.12)',
+                        color: '#A78BFA', fontSize: '13px', fontWeight: 600,
+                        cursor: 'pointer', transition: 'all 0.2s',
+                      }}
+                    >
+                      🔄 Попробовать снова
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
+
 
           {/* HOST VERIFY — shown in fullscreen popup below, not here */}
           {phase === PHASES.HOST_VERIFY && !isRecorder && (

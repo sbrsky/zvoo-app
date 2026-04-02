@@ -130,14 +130,22 @@ function buildCompareRequest(original: string, attempt: string, guestGuessText: 
   }
 }
 
-async function callGemini(model: string, requestBody: any) {
+async function callGemini(model: string, requestBody: any, timeoutMs = 30_000) {
   const url = getModelUrl(model)
-  console.log(`Calling Gemini model: ${model}`)
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody),
-  })
+  console.log(`[Gemini] Calling model: ${model} (timeout=${timeoutMs}ms)`)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -274,7 +282,10 @@ No markdown, no explanation, just the JSON array.`
       }
       let imgData: any
       try {
-        const res = await fetch(imageUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(imageReq) })
+        const imgController = new AbortController()
+        const imgTimer = setTimeout(() => imgController.abort(), 30_000)
+        const res = await fetch(imageUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(imageReq), signal: imgController.signal })
+        clearTimeout(imgTimer)
         imgData = await res.json()
       } catch (e: any) {
         throw new Error(`Image generation failed: ${e.message}`)
@@ -310,7 +321,10 @@ No markdown, no explanation, just the JSON array.`
       let imageBase64 = ''
       let mimeType = 'image/png'
       try {
-        const res = await fetch(imageUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(imageReq) })
+        const imagCtrl = new AbortController()
+        const imagTimer = setTimeout(() => imagCtrl.abort(), 30_000)
+        const res = await fetch(imageUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(imageReq), signal: imagCtrl.signal })
+        clearTimeout(imagTimer)
         const imgData = await res.json()
         const parts = imgData?.candidates?.[0]?.content?.parts || []
         const imgPart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'))
