@@ -303,23 +303,32 @@ async function checkRawWs() {
         setDot('wsjoin', 'running', '...')
       }
 
+      let heartbeatSent = false
       ws.onmessage = (e) => {
         const data = e.data
-        log(`← ${data.slice(0,120)}`, 'info')
         try {
           const msg = JSON.parse(data)
-          if (msg.event === 'phx_reply' && msg.payload?.status === 'ok') {
+          // Only log first 5 messages to avoid spam
+          if (logbox.children.length < 30) log(`← ${data.slice(0,120)}`, 'info')
+
+          if (msg.event === 'phx_reply' && msg.payload?.status === 'ok' && msg.topic !== 'phoenix') {
+            // Channel JOIN success
             setDot('wsjoin', 'ok', `channel joined (${msg.topic})`)
             log(`✅ Channel JOIN ok: ${msg.topic}`, 'ok')
             setSum('rt', '✅', true)
             setSum('ws', '✅', true)
-            // Send heartbeat
-            ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: '2' }))
-            setDot('wsping', 'running', '...')
-          } else if (msg.event === 'phx_reply' && msg.topic === 'phoenix') {
+            // Send heartbeat only once
+            if (!heartbeatSent) {
+              heartbeatSent = true
+              ws.send(JSON.stringify({ topic: 'phoenix', event: 'heartbeat', payload: {}, ref: '2' }))
+              setDot('wsping', 'running', '...')
+            }
+          } else if (msg.event === 'phx_reply' && msg.topic === 'phoenix' && !heartbeatSent === false) {
+            // Heartbeat PONG — stop here
             setDot('wsping', 'ok', 'pong received')
-            log(`✅ Heartbeat PONG received`, 'ok')
-            ws.close()
+            log(`✅ Heartbeat PONG received — WS fully functional`, 'ok')
+            clearTimeout(timeout)
+            ws.close(1000, 'diagnostic complete')
             resolve(true)
           } else if (msg.event === 'phx_error' || (msg.payload?.status && msg.payload.status !== 'ok')) {
             log(`⚠️ Channel error: ${JSON.stringify(msg.payload)}`, 'warn')
@@ -328,6 +337,7 @@ async function checkRawWs() {
           }
         } catch {}
       }
+
 
       ws.onerror = (e) => {
         clearTimeout(timeout)
