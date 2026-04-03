@@ -11,12 +11,15 @@ const SUPABASE_URL   = Deno.env.get('SUPABASE_URL') || ''
 const SUPABASE_KEY   = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY') || ''
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 
-// Stable models that support generateContent via REST API
-const DEFAULT_MODEL = 'gemini-2.0-flash'            // stable fallback
-const FALLBACK_MODEL = 'gemini-1.5-flash'            // very stable last resort
+// Models for audio transcription + text scoring (generateContent via REST API)
+const AUDIO_MODEL   = 'gemini-3.1-flash-lite-preview' // primary: audio + text (matches app_settings)
+const DEFAULT_MODEL = 'gemini-2.0-flash'               // fallback if AUDIO_MODEL unavailable
+const FALLBACK_MODEL = 'gemini-1.5-flash'              // last resort fallback
+
+// Model for image generation only (separate capability, not for audio)
 const IMAGE_MODEL   = 'gemini-3.1-flash-image-preview'
 
-// Models that DON'T support standard generateContent (Live API only)
+// Models that DON'T support standard generateContent (Live API / WebSocket only)
 const LIVE_API_ONLY_MODELS = [
   'gemini-3.1-flash-live-preview',
   'gemini-2.5-flash-preview-native-audio',
@@ -76,7 +79,7 @@ function normalizeModelName(raw: string): string {
 async function getGeminiModels() {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
     logWarn('getModels', 'No Supabase creds → using defaults')
-    return { primary: DEFAULT_MODEL, fallback: FALLBACK_MODEL }
+    return { primary: AUDIO_MODEL, fallback: DEFAULT_MODEL }
   }
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/app_settings?key=eq.gemini_model&select=value`, {
@@ -86,13 +89,13 @@ async function getGeminiModels() {
     if (data?.length > 0 && typeof data[0].value === 'string') {
       const primary = normalizeModelName(data[0].value)
       logInfo('getModels', `DB model config: primary=${primary}`)
-      return { primary, fallback: FALLBACK_MODEL }
+      return { primary, fallback: DEFAULT_MODEL }
     }
-    logWarn('getModels', 'No gemini_model in app_settings → using defaults')
+    logWarn('getModels', 'No gemini_model in app_settings → using AUDIO_MODEL default')
   } catch (e: any) {
     logError('getModels', `Failed to fetch model config: ${e.message}`)
   }
-  return { primary: DEFAULT_MODEL, fallback: FALLBACK_MODEL }
+  return { primary: AUDIO_MODEL, fallback: DEFAULT_MODEL }
 }
 
 function getModelUrl(model: string) {

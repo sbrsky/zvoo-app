@@ -4,6 +4,7 @@ import { useAuth } from '../hooks/useAuth'
 import { useRoom } from '../hooks/useRoom'
 import { useAudioEngine, MAX_RECORDING_SECONDS } from '../hooks/useAudioEngine'
 import { supabase } from '../lib/supabase'
+import { getFreshToken } from '../lib/authToken'
 import { GAME_EVENTS, ROOM_STATUS, GAME_TYPES } from '../lib/constants'
 import { PHASES, PHASE_ORDER, ACTIVE_GAME_PHASES, inferPhaseFromSession } from '../lib/gamePhases'
 import { scoreWithGemini, isGeminiAvailable, transcribeHostAudio } from '../lib/geminiScoring'
@@ -398,19 +399,27 @@ export default function Game() {
     })
   }, [gameSession?.id, isGuesser])
 
+  // Track when upload started so we can detect truly stale uploads (crashed in background tab)
+  const uploadStartTimeRef = useRef(null)
+
   // Unblock frozen upload/submit spinners when user returns to the tab.
   // (iOS/desktop browsers can freeze Promises when tab goes to background,
   //  leaving uploading=true forever even after the work completed.)
+  // IMPORTANT: only clear if 35s+ have passed — otherwise we cancel mid-upload!
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
-        // If we've been "uploading" for more than 35s (past the timeout), just clear it.
-        // The realtime DB listener will push phase transitions if upload actually finished.
-        setUploading(prev => {
-          if (prev) console.log('[Game] Tab visible — clearing stale uploading flag')
-          return false
-        })
-        setPendingSubmit(false)
+        const elapsed = uploadStartTimeRef.current ? Date.now() - uploadStartTimeRef.current : 0
+        const isStale = elapsed > 35_000
+        if (isStale) {
+          setUploading(prev => {
+            if (prev) console.log(`[Game] Tab visible — clearing STALE uploading flag (elapsed: ${elapsed}ms)`)
+            return false
+          })
+          setPendingSubmit(false)
+        } else if (uploadStartTimeRef.current) {
+          console.log(`[Game] Tab visible — upload still fresh (elapsed: ${elapsed}ms), NOT clearing`)
+        }
       }
     }
     document.addEventListener('visibilitychange', handleVisibility)
@@ -764,8 +773,38 @@ export default function Game() {
     const ext = blob.type?.includes('webm') ? 'webm' : 'wav'
     const contentType = blob.type || 'audio/webm'
     const fileName = `${roomId}/${name}_${Date.now()}.${ext}`
-    const { data, error } = await supabase.storage.from('audio').upload(fileName, blob, { contentType })
-    if (error) throw error
+    console.log(`[uploadAudio] uploading '${name}' → ${fileName} | size=${blob.size}B | type=${blob.type} | contentType=${contentType}`)
+
+    // FIX: Use getFreshToken() which (a) detects expiry and refreshes BEFORE the upload,
+    // and (b) avoids SDK state rotation race conditions that hang supabase.storage.upload().
+    const token = await getFreshToken()
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+    console.log(`[uploadAudio] token present: ${!!token}, using ${token ? 'user JWT' : 'anon key'}`)
+
+    const response = await fetch(
+      `${supabaseUrl}/storage/v1/object/audio/${fileName}`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token || anonKey}`,
+          'apikey': anonKey,
+          'Content-Type': contentType,
+          'x-upsert': 'false',
+        },
+        body: blob,
+      }
+    )
+
+    if (!response.ok) {
+      const errBody = await response.json().catch(() => ({ message: response.statusText }))
+      const msg = errBody?.message || errBody?.error || response.statusText
+      console.error(`[uploadAudio] FAILED '${name}': HTTP ${response.status} — ${msg}`)
+      throw new Error(`Upload failed (${response.status}): ${msg}`)
+    }
+
+    console.log(`[uploadAudio] SUCCESS '${name}' → ${fileName}`)
     return fileName
   }, [roomId])
 
@@ -885,8 +924,12 @@ export default function Game() {
     if (wasRecording && !audio.isRecording && activeHandlerRef.current) {
       const handler = activeHandlerRef.current
       activeHandlerRef.current = null
-      if (handler === 'host') doProcessHost(audio.audioBlob)
-      if (handler === 'mimic') doProcessMimic(audio.audioBlob)
+      console.log(`[autoStop useEffect] handler=${handler} | audio.audioBlob=${audio.audioBlob?.size ?? 'NULL'}B | audioBlobRef=${audio.audioBlobRef?.current?.size ?? 'N/A'}B`)
+      // CRITICAL: audio.audioBlob may be stale in this closure! Use the ref directly.
+      const blobForProcessing = audio.audioBlobRef?.current || audio.audioBlob
+      console.log(`[autoStop useEffect] using blob=${blobForProcessing?.size ?? 'NULL'}B`)
+      if (handler === 'host') doProcessHost(blobForProcessing)
+      if (handler === 'mimic') doProcessMimic(blobForProcessing)
       if (handler === 'imag') handleImagRecordStop()
     }
   }, [audio.isRecording]) // eslint-disable-line
@@ -902,25 +945,38 @@ export default function Game() {
   }
 
   const doProcessHost = async (recordedBlob) => {
+    console.log(`[doProcessHost] START | blob=${recordedBlob?.size}B | type=${recordedBlob?.type}`)
     if (!recordedBlob || recordedBlob.size === 0) {
+      console.warn('[doProcessHost] Empty blob — aborting')
       setPhase(PHASES.HOST_RECORD)
       return
     }
+    uploadStartTimeRef.current = Date.now()
     setUploading(true)
     setUploadTimedOut(false)
     try {
-      // Refresh auth before network ops in case of long pause
-      try { await supabase.auth.refreshSession() } catch { /* non-fatal */ }
+      // FIX A: Removed fire-and-forget refreshSession() — it caused a race condition where
+      // the Supabase SDK rotated the auth token mid-upload, hanging in-flight fetch requests.
+      // The SDK handles token refresh automatically; uploadAudio now gets a fresh token explicitly.
+      console.log('[doProcessHost] starting audio processing...')
 
+      console.log('[doProcessHost] calling reverseAudio...')
       const reversedBlob = await withTimeout(audio.reverseAudio(recordedBlob))
+      console.log(`[doProcessHost] reverseAudio result: ${reversedBlob ? `${reversedBlob.size}B | type=${reversedBlob.type}` : 'NULL (failed)'}`)
+
       if (reversedBlob) {
+        console.log('[doProcessHost] uploading original...')
         const originalUrl = await withTimeout(uploadAudio(recordedBlob, 'original'))
+        console.log('[doProcessHost] uploading reversed...')
         const reversedUrl = await withTimeout(uploadAudio(reversedBlob, 'reversed'))
+        console.log('[doProcessHost] updating session with URLs...')
         await withTimeout(updateSession({ original_audio_url: originalUrl, reversed_audio_url: reversedUrl }))
+        console.log('[doProcessHost] session updated — starting transcription...')
         
         // Transcribe original audio
         // Transcription progress is shown via the FakeProgressBar
         const transcription = await withTimeout(transcribeHostAudio(recordedBlob, room?.game_language || 'ru'))
+        console.log(`[doProcessHost] transcription result: "${transcription}"`)
         
         if (transcription) {
           setActualTranscription(transcription)
@@ -932,13 +988,15 @@ export default function Game() {
           setPhase(PHASES.GUEST_LISTEN)
         }
       } else {
+        console.error('[doProcessHost] reverseAudio returned null — showing timeout UI')
         setUploadTimedOut(true) // treat decode failure same as timeout — show retry UI
       }
     } catch (err) {
-      console.error('doProcessHost error:', err)
+      console.error('[doProcessHost] CAUGHT ERROR:', err?.message, '| type:', err?.name, '| status:', err?.statusCode)
       setUploadTimedOut(true) // catches both real errors and our TIMEOUT sentinel
       setPhase(PHASES.HOST_RECORD)
     } finally {
+      uploadStartTimeRef.current = null
       setUploading(false)
     }
   }
@@ -984,8 +1042,10 @@ export default function Game() {
   }
 
   const handleHostStop = async () => {
+    console.log('[handleHostStop] manual stop triggered | activeHandlerRef:', activeHandlerRef.current)
     activeHandlerRef.current = null
     const recordedBlob = await audio.stopRecording()
+    console.log(`[handleHostStop] stopRecording resolved | blob=${recordedBlob?.size ?? 'NULL'}B | type=${recordedBlob?.type}`)
     await doProcessHost(recordedBlob)
   }
 

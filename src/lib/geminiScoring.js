@@ -5,8 +5,11 @@
  * which securely holds the GEMINI_API_KEY.
  */
 import { supabase } from './supabase'
+import { getFreshToken } from './authToken'
 
 const INVOKE_TIMEOUT_MS = 40_000 // Hard limit for Edge Function round-trip
+const _SUPABASE_URL  = import.meta.env.VITE_SUPABASE_URL
+const _SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY
 
 // ─── Non-blocking base64 conversion ──────────────────────────────────────────
 // IMPORTANT: Do NOT use the synchronous `String.fromCharCode` loop — it blocks
@@ -45,19 +48,39 @@ async function invokeWithTimeout(fnName, body, timeoutMs = INVOKE_TIMEOUT_MS) {
   const t0 = Date.now()
   console.log(`[geminiScoring] invokeWithTimeout: calling '${fnName}' (timeout=${timeoutMs}ms)`)
 
+  // FIX: Use raw fetch() with explicit session token instead of supabase.functions.invoke().
+  // supabase.functions.invoke() uses the SDK's internal auth state, which can be mid-rotation
+  // after TOKEN_REFRESHED — causing the request to be sent with a stale/invalid token → 401.
+  // getFreshToken() additionally handles expired JWTs by refreshing before the request.
+  const token = await getFreshToken()
+
+  console.log(`[geminiScoring] invokeWithTimeout: token present=${!!token}`)
+
   try {
-    const { data, error } = await supabase.functions.invoke(fnName, {
-      body,
-      signal: controller.signal,
-    })
+    const response = await fetch(
+      `${_SUPABASE_URL}/functions/v1/${fnName}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || _SUPABASE_ANON}`,
+          'apikey': _SUPABASE_ANON,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      }
+    )
     clearTimeout(timer)
     const elapsed = Date.now() - t0
-    console.log(`[geminiScoring] invokeWithTimeout: '${fnName}' returned in ${elapsed}ms`)
+    console.log(`[geminiScoring] invokeWithTimeout: '${fnName}' returned in ${elapsed}ms | HTTP ${response.status}`)
 
-    if (error) {
-      console.error(`[geminiScoring] Edge Function '${fnName}' returned error:`, error)
-      throw new Error(error.message || 'Edge Function error')
+    if (!response.ok) {
+      const errText = await response.text().catch(() => response.statusText)
+      console.error(`[geminiScoring] Edge Function '${fnName}' HTTP ${response.status}:`, errText.slice(0, 300))
+      throw new Error(`Edge Function '${fnName}' returned HTTP ${response.status}: ${errText.slice(0, 200)}`)
     }
+
+    const data = await response.json()
     return data
   } catch (err) {
     clearTimeout(timer)
